@@ -18,6 +18,7 @@ class Committee:
     parent_system_code: Optional[str] = None
     parent_name: Optional[str] = None
     subcommittees: List[Subcommittee] = field(default_factory=list)
+    api_url: Optional[str] = None 
     raw: Dict[str, Any] = field(default_factory=dict)
 
 
@@ -37,6 +38,7 @@ class Hearing:
     committees: List[Dict[str, str]] = field(default_factory=list)  # {"name","systemCode"}
     dates: List[str] = field(default_factory=list)                  # ISO dates
     formats: List[HearingFormat] = field(default_factory=list)      # PDF/Formatted Text
+    api_url: Optional[str] = None 
     raw: Dict[str, Any] = field(default_factory=dict)
 
 
@@ -49,6 +51,7 @@ class CommitteeMeeting:
     date: Optional[str] = None
     chamber: Optional[str] = None
     committees: List[Dict[str, str]] = field(default_factory=list)
+    api_url: Optional[str] = None 
     raw: Dict[str, Any] = field(default_factory=dict)
 
 
@@ -75,6 +78,7 @@ class Member:
     chamber: Optional[str] = None
     is_current: Optional[bool] = None
     roles: List[MemberRole] = field(default_factory=list)
+    api_url: Optional[str] = None 
     raw: Dict[str, Any] = field(default_factory=dict)
 
 
@@ -83,6 +87,7 @@ class BillTextVersion:
     type: Optional[str] = None
     url: Optional[str] = None
     date: Optional[str] = None
+    api_url: Optional[str] = None
     raw: Dict[str, Any] = field(default_factory=dict)
 
 
@@ -96,4 +101,5 @@ class Bill:
     sponsor: Optional[Dict[str, Any]] = None
     urls: List[str] = field(default_factory=list)
     texts: List[BillTextVersion] = field(default_factory=list)
+    api_url: Optional[str] = None
     raw: Dict[str, Any] = field(default_factory=dict)

@@ -1,19 +1,34 @@
+#%%
 from __future__ import annotations
 
 import os
+import json
 import random
 import time
+from tqdm import tqdm
 import email.utils as eut
 from datetime import datetime, timezone
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Callable, Iterator, Optional, Tuple, Union, Dict, Any, List, Set, Literal
 
 import requests
 from requests import RequestException
+from urllib.parse import urlparse, parse_qsl, urlencode, urlunparse
 
 from src.models import (
     Bill, BillTextVersion, Committee, CommitteeMeeting, Hearing, HearingFormat,
     Member, MemberRole, Subcommittee
 )
+
+from dotenv import load_dotenv
+
+load_dotenv()
+
+CONGRESS_API_KEY = os.getenv("CONGRESS_API_KEY")
+
+
+#%%
+Entity = Literal["hearing", "committee_meeting", "committee", "bill", "member"]
+Predicate = Callable[[Dict[str, Any]], bool]
 
 
 class CongressAPI:
@@ -38,6 +53,9 @@ class CongressAPI:
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
         self.session = requests.Session()
+        self.session.headers.update({
+            "Accept": "application/json, application/xml;q=0.9, */*;q=0.8"
+        })
 
         # backoff/limits
         self.min_interval = float(min_interval)
@@ -72,6 +90,31 @@ class CongressAPI:
                 return max(0.0, (dt - datetime.now(timezone.utc)).total_seconds())
             except Exception:
                 return 0.0
+            
+    @staticmethod
+    def _parse_payload(resp: requests.Response) -> Dict[str, Any]:
+        """
+        Parse a Congress.gov payload that may be JSON or XML.
+        Try JSON first, then XML via xmltodict; return a plain dict.
+        """
+        # 1) Try JSON
+        try:
+            return resp.json()
+        except (ValueError, json.JSONDecodeError):
+            pass
+
+        # 2) Fallback to XML
+        try:
+            import xmltodict  # lazy import so it's optional until needed
+        except Exception as e:
+            raise RuntimeError(
+                "Response appears to be XML, but 'xmltodict' is not installed. "
+                "Install it with `pip install xmltodict`."
+            ) from e
+
+        parsed = xmltodict.parse(resp.text)
+        # Ensure a plain dict (no OrderedDict) via JSON round-trip
+        return json.loads(json.dumps(parsed))
 
     def _sleep_backoff(self, attempt: int) -> None:
         # Full jitter: sleep in [0, min(cap, base * 2**attempt)]
@@ -111,23 +154,193 @@ class CongressAPI:
         if params:
             p.update({k: v for k, v in params.items() if v is not None})
         resp = self._request_with_backoff("GET", url, params=p)
-        return resp.json()
+        return self._parse_payload(resp)
 
-    def _paged(self, first_path: str, data_key: str, params: Optional[Dict[str, Any]] = None) -> Iterable[Dict[str, Any]]:
+    def _extract_items(self, block) -> list:
         """
-        Iterate list endpoints that return a 'pagination.next' URL and a top-level data_key.
+        Normalize Congress.gov list payloads:
+        - {"item": [...]} -> [...]
+        - [...]            -> [...]
+        - {"items": [...]} -> [...]
+        - None/other       -> []
         """
-        resp = self._get(first_path, params=params)
-        for item in resp.get(data_key, {}).get("item", []) or []:
+        if block is None:
+            return []
+        if isinstance(block, list):
+            return block
+        if isinstance(block, dict):
+            if isinstance(block.get("item"), list):
+                return block["item"]
+            if isinstance(block.get("items"), list):
+                return block["items"]
+        return []
+    
+    # inside CongressAPI
+    def _url_with_key(self, url: Optional[str]) -> Optional[str]:
+        """Return URL with api_key added if it's an api.congress.gov link; pass through others/None."""
+        if not url:
+            return url
+        u = urlparse(url)
+        if u.netloc != "api.congress.gov":
+            # Don't append keys to non-API assets like PDFs on www.congress.gov
+            return url
+        q = dict(parse_qsl(u.query, keep_blank_values=True))
+        if "api_key" not in q:
+            q["api_key"] = self.api_key
+        new_q = urlencode(q, doseq=True)
+        return urlunparse((u.scheme, u.netloc, u.path, u.params, new_q, u.fragment))
+    
+    def _paged(self, first_path: str, data_key: str, params: Optional[Dict[str, Any]] = None):
+        data = self._get(first_path, params=params)
+        for item in self._extract_items(data.get(data_key)):
             yield item
-        next_url = resp.get("pagination", {}).get("next")
+        next_url = (data.get("pagination") or {}).get("next")
         while next_url:
-            # next_url already includes api_key/offset/limit
+            next_url = self._url_with_key(next_url)     # <--- inject key if missing
             resp2 = self._request_with_backoff("GET", next_url)
-            data = resp2.json()
-            for item in data.get(data_key, {}).get("item", []) or []:
+            data = self._parse_payload(resp2)
+            for item in self._extract_items(data.get(data_key)):
                 yield item
-            next_url = data.get("pagination", {}).get("next")
+            next_url = (data.get("pagination") or {}).get("next")
+
+
+    def iter_entities(
+        self,
+        entity: Entity,
+        *,
+        chamber: Optional[str] = None,
+        congress: Optional[int] = None,
+        congress_range: Optional[Tuple[int, int]] = None,  # for list-by-congress entities
+        hydrate: bool = False,
+        where: Optional[Predicate] = None,                 # receives a dict (list item or hydrated detail)
+        # bills-specific optional params
+        bill_type: Optional[str] = None,
+        introduced_start: Optional[str] = None,
+        introduced_end: Optional[str] = None,
+        # members-specific optional params
+        state: Optional[str] = None,
+        district: Optional[str] = None,
+        current: Optional[bool] = None,
+    ) -> Iterator[Union[Dict[str, Any], Any]]:
+        """
+        Stream entities with optional detail hydration and predicate filtering.
+
+        - entity: one of "hearing", "committee_meeting", "committee", "bill", "member"
+        - where: a function(dict) -> bool; applied to list item (fast) or detail (if hydrate=True)
+        - hydrate: if True, fetch detail and return a typed object (Hearing, CommitteeMeeting, Committee, Bill, Member)
+                otherwise return the raw list item dict (fast).
+        - congress_range: (start, end), inclusive, for entities that list by congress (hearing/committee_meeting/bill)
+        """
+        def _range(cg: Optional[int], cgr: Optional[Tuple[int, int]]) -> List[int]:
+            if cgr and len(cgr) == 2:
+                a, b = cgr
+                if a > b: a, b = b, a
+                return list(range(a, b + 1))
+            return [cg] if cg else []
+
+        # Map list streaming per entity
+        def _iter_list_items_for_congress(target_congress: int) -> Iterator[Dict[str, Any]]:
+            if entity == "hearing":
+                path = (f"hearing/{target_congress}/{chamber}" if chamber else f"hearing/{target_congress}")
+                yield from self._paged(path, data_key="hearings")
+            elif entity == "committee_meeting":
+                path = (f"committee-meeting/{target_congress}/{chamber}" if chamber else f"committee-meeting/{target_congress}")
+                yield from self._paged(path, data_key="committeeMeetings")
+            elif entity == "bill":
+                if bill_type:
+                    path = f"bill/{target_congress}/{bill_type}"
+                else:
+                    path = f"bill/{target_congress}"
+                params = {}
+                if introduced_start: params["introducedDateStart"] = introduced_start
+                if introduced_end:   params["introducedDateEnd"]   = introduced_end
+                yield from self._paged(path, data_key="bills", params=params)
+            else:
+                raise ValueError(f"Entity '{entity}' does not support congress-scoped listing.")
+
+        def _iter_list_items_general() -> Iterator[Dict[str, Any]]:
+            if entity == "committee":
+                path = ("committee" if not (congress and chamber) else f"committee/{congress}/{chamber}")
+                yield from self._paged(path, data_key="committees")
+            elif entity == "member":
+                if congress and chamber:
+                    path, params = f"member/{congress}/{chamber}", None
+                else:
+                    path, params = "member", {
+                        "congress": congress,
+                        "chamber": chamber,
+                        "state": state,
+                        "district": district,
+                        "currentMember": str(current).lower() if isinstance(current, bool) else None,
+                    }
+                yield from self._paged(path, data_key="members", params=params)
+            else:
+                raise ValueError(f"Unhandled general list entity '{entity}'.")
+
+        # Choose listing strategy
+        list_stream: Iterator[Dict[str, Any]]
+        if entity in ("hearing", "committee_meeting", "bill"):
+            congresses = _range(congress, congress_range) or ([congress] if congress else [])
+            if not congresses:
+                raise ValueError(f"Provide congress or congress_range for entity '{entity}'.")
+            def _chain():
+                for cg in congresses:
+                    for item in _iter_list_items_for_congress(cg):
+                        yield item
+            list_stream = _chain()
+        else:
+            list_stream = _iter_list_items_general()
+
+        # Detail fetchers (typed) per entity
+        def _hydrate(item: Dict[str, Any]):
+            if entity == "hearing":
+                jn, cg, ch = item.get("jacketNumber"), item.get("congress"), (item.get("chamber") or chamber or "").lower()
+                if not (jn and cg and ch): return None
+                return self.get_hearing(cg, ch, jn)
+            if entity == "committee_meeting":
+                ev, cg, ch = item.get("eventId"), item.get("congress"), (item.get("chamber") or chamber or "").lower()
+                if not (ev and cg and ch): return None
+                return self.get_committee_meeting(cg, ch, ev)
+            if entity == "committee":
+                ch = (item.get("chamber") or chamber or "").lower()
+                sc = item.get("systemCode")
+                if not (sc and ch): return None
+                return self.get_committee(ch, sc)
+            if entity == "bill":
+                cg = item.get("congress")
+                bt = item.get("type") or item.get("billType")
+                num = item.get("number")
+                if not (cg and bt and num): return None
+                return self.get_bill(cg, bt, num)
+            if entity == "member":
+                bid = item.get("bioguideId")
+                if not bid: return None
+                return self.get_member(bid)
+            return None
+
+        # Stream + (optional) filter + (optional) hydrate
+        for it in list_stream:
+            # If filtering without hydration, pass the list item dict to predicate
+            if where and not hydrate and not where(it):
+                continue
+
+            if hydrate:
+                full = _hydrate(it)
+                if full is None:
+                    continue
+                # If filtering with hydration, convert to a dict-like view for the predicate
+                if where:
+                    # Use the already-available .raw when present, else build a minimal dict
+                    raw_like = getattr(full, "raw", None)
+                    probe = raw_like if isinstance(raw_like, dict) else (
+                        full.__dict__ if hasattr(full, "__dict__") else {}
+                    )
+                    if not where(probe):
+                        continue
+                yield full
+            else:
+                yield it
+
 
     # ------------- committees -------------
     def get_committees(self, congress: Optional[int] = None, chamber: Optional[str] = None) -> List[Committee]:
@@ -136,7 +349,7 @@ class CongressAPI:
         out: List[Committee] = []
         for it in items:
             subs = [Subcommittee(system_code=sc.get("systemCode"), name=sc.get("name"))
-                    for sc in (it.get("subcommittees", {}) or {}).get("item", []) or []]
+                    for sc in self._extract_items(it.get("subcommittees"))] or []
             parent = it.get("parent") or {}
             out.append(Committee(
                 system_code=it.get("systemCode"),
@@ -146,6 +359,7 @@ class CongressAPI:
                 parent_system_code=parent.get("systemCode"),
                 parent_name=parent.get("name"),
                 subcommittees=subs,
+                api_url=self._url_with_key(it.get("url")),
                 raw=it,
             ))
         return out
@@ -154,7 +368,7 @@ class CongressAPI:
         data = self._get(f"committee/{chamber}/{system_code}")
         c = data.get("committee", {})
         subs = [Subcommittee(system_code=sc.get("systemCode"), name=sc.get("name"))
-                for sc in (c.get("subcommittees", {}) or {}).get("item", []) or []]
+                for sc in self._extract_items(c.get("subcommittees"))] or []
         parent = c.get("parent") or {}
         return Committee(
             system_code=c.get("systemCode"),
@@ -164,6 +378,7 @@ class CongressAPI:
             parent_system_code=parent.get("systemCode"),
             parent_name=parent.get("name"),
             subcommittees=subs,
+            api_url=self._url_with_key(c.get("url")),
             raw=c,
         )
 
@@ -179,7 +394,7 @@ class CongressAPI:
         out: List[Hearing] = []
         for it in items:
             formats = [HearingFormat(type=f.get("type"), url=f.get("url"))
-                       for f in (it.get("formats", {}) or {}).get("item", []) or []]
+                       for f in self._extract_items(it.get("formats"))]
             out.append(Hearing(
                 jacket_number=it.get("jacketNumber"),
                 title=it.get("title"),
@@ -187,9 +402,10 @@ class CongressAPI:
                 chamber=it.get("chamber"),
                 citation=it.get("citation"),
                 committees=[{"name": x.get("name"), "systemCode": x.get("systemCode")}
-                            for x in (it.get("committees", {}) or {}).get("item", []) or []],
-                dates=[d.get("date") for d in (it.get("dates", {}) or {}).get("item", []) or []],
+                            for x in self._extract_items(it.get("committees"))],
+                dates=[d.get("date") for d in self._extract_items(it.get("dates"))],
                 formats=formats,
+                api_url=self._url_with_key(it.get("url")),
                 raw=it,
             ))
         return out
@@ -197,7 +413,7 @@ class CongressAPI:
     def get_hearing(self, congress: int, chamber: str, jacket_number: int) -> Hearing:
         h = self._get(f"hearing/{congress}/{chamber}/{jacket_number}").get("hearing", {})
         formats = [HearingFormat(type=f.get("type"), url=f.get("url"))
-                   for f in (h.get("formats", {}) or {}).get("item", []) or []]
+                   for f in self._extract_items(h.get("formats"))]
         return Hearing(
             jacket_number=h.get("jacketNumber"),
             title=h.get("title"),
@@ -205,9 +421,10 @@ class CongressAPI:
             chamber=h.get("chamber"),
             citation=h.get("citation"),
             committees=[{"name": x.get("name"), "systemCode": x.get("systemCode")}
-                        for x in (h.get("committees", {}) or {}).get("item", []) or []],
-            dates=[d.get("date") for d in (h.get("dates", {}) or {}).get("item", []) or []],
+                        for x in self._extract_items(h.get("committees"))],
+            dates=[d.get("date") for d in self._extract_items(h.get("dates"))],
             formats=formats,
+            api_url=self._url_with_key(h.get("url")),
             raw=h,
         )
 
@@ -230,7 +447,8 @@ class CongressAPI:
                 date=it.get("date"),
                 chamber=it.get("chamber"),
                 committees=[{"name": x.get("name"), "systemCode": x.get("systemCode")}
-                            for x in (it.get("committees", {}) or {}).get("item", []) or []],
+                            for x in self._extract_items(it.get("committees"))],
+                api_url=self._url_with_key(it.get("url")),
                 raw=it,
             ))
         return out
@@ -245,7 +463,8 @@ class CongressAPI:
             date=m.get("date"),
             chamber=m.get("chamber"),
             committees=[{"name": x.get("name"), "systemCode": x.get("systemCode")}
-                        for x in (m.get("committees", {}) or {}).get("item", []) or []],
+                        for x in self._extract_items(m.get("committees"))],
+            api_url=self._url_with_key(m.get("url")),
             raw=m,
         )
 
@@ -284,7 +503,7 @@ class CongressAPI:
                     end=r.get("endYear"),
                     raw=r,
                 )
-                for r in (it.get("roles", {}) or {}).get("item", []) or []
+                for r in self._extract_items(it.get("roles"))
             ]
             out.append(
                 Member(
@@ -297,6 +516,7 @@ class CongressAPI:
                     chamber=it.get("chamber"),
                     is_current=it.get("isCurrent"),
                     roles=roles,
+                    api_url=self._url_with_key(it.get("url")),
                     raw=it,
                 )
             )
@@ -310,7 +530,7 @@ class CongressAPI:
                 title=r.get("title"), state=r.get("state"), district=r.get("district"),
                 start=r.get("startYear"), end=r.get("endYear"), raw=r
             )
-            for r in (m.get("roles", {}) or {}).get("item", []) or []
+            for r in self._extract_items(m.get("roles"))
         ]
         return Member(
             bioguide_id=m.get("bioguideId"),
@@ -322,6 +542,7 @@ class CongressAPI:
             chamber=m.get("chamber"),
             is_current=m.get("isCurrent"),
             roles=roles,
+            api_url=self._url_with_key(m.get("url")),
             raw=m,
         )
 
@@ -355,7 +576,7 @@ class CongressAPI:
         for it in items:
             texts = [
                 BillTextVersion(type=tv.get("type"), url=tv.get("url"), date=tv.get("date"), raw=tv)
-                for tv in (it.get("textVersions", {}) or {}).get("item", []) or []
+                for tv in self._extract_items(it.get("textVersions"))
             ]
             out.append(
                 Bill(
@@ -367,6 +588,7 @@ class CongressAPI:
                     sponsor=it.get("sponsor"),
                     urls=[u for u in [it.get("url")] if u],
                     texts=texts,
+                    api_url=self._url_with_key(it.get("url")),
                     raw=it,
                 )
             )
@@ -376,7 +598,7 @@ class CongressAPI:
         b = self._get(f"bill/{congress}/{bill_type}/{bill_number}").get("bill", {})
         texts = [
             BillTextVersion(type=tv.get("type"), url=tv.get("url"), date=tv.get("date"), raw=tv)
-            for tv in (b.get("textVersions", {}) or {}).get("item", []) or []
+            for tv in self._extract_items(b.get("textVersions"))
         ]
         return Bill(
             congress=b.get("congress"),
@@ -387,5 +609,38 @@ class CongressAPI:
             sponsor=b.get("sponsor"),
             urls=[u for u in [b.get("url")] if u],
             texts=texts,
+            api_url=self._url_with_key(b.get("url")),
             raw=b,
         )
+
+#%%
+
+if __name__ == "__main__":
+    client = CongressAPI(
+        api_key=CONGRESS_API_KEY,
+        timeout=60,
+        min_interval=0.0,   # set e.g. 0.1 to cap at ~10 rps
+        max_tries=8,          # retry attempts for 429/5xx/timeouts
+        backoff_base=0.75,  # base backoff seconds
+        backoff_cap=30.0    # max backoff sleep
+    )
+
+    
+    TARGETS = {"hsas00", "ssas00", "ssfr00", "hsfa00"}
+
+    all_hearings = client.get_hearings(congress=118, chamber="house")
+    hearings_to_keep = []
+    for i, h in enumerate(tqdm(all_hearings)):
+        full = client.get_hearing(h.congress, h.chamber.lower(), h.jacket_number)
+        if any(c["systemCode"] in TARGETS for c in full.committees):
+            for f in full.formats:
+                if f.type in ("PDF", "Formatted Text"):
+                    hearings_to_keep.append({
+                        "title": full.title,
+                        "url": f.url,
+                        "committee": full.committees
+                    })
+                    print(full.title, f.url)
+                    if i >= 10:
+                        break
+# %%
