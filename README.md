@@ -20,19 +20,17 @@ Includes:
 
 ```bash
 
-pip install git+https://github.com/<you>/congressgov-client.git@main
+pip install git+https://github.com/<you>/congressapi-client.git@main
 # or pin a tag:
-pip install git+https://github.com/<you>/congressgov-client.git@v0.1.0
+pip install git+https://github.com/<you>/congressapi-client.git@v0.1.0
 
 ```
 
 
 ## Usage
 ```python
-from congressgov_client import CongressAPI
-from congressgov_client.models import Hearing
-
-api = CongressAPI()  # reads CONGRESS_API_KEY env var
+from congressapi_client import CongressAPIClient
+api = CongressAPIClient()  # make sure to include your CONGRESS_API_KEY
 
 # Members
 members = api.get_members(congress=119, chamber="house", state="CO", current=True)
@@ -65,7 +63,7 @@ export CONGRESS_API_KEY="your-key-here"
 
 Constructor options:
 ```python
-CongressAPI(
+CongressAPIClient(
     api_key: str | None = None,
     base_url: str = "https://api.congress.gov/v3",
     timeout: int = 60,
@@ -73,6 +71,8 @@ CongressAPI(
     max_tries: int = 8,          # retry attempts for 429/5xx/timeouts
     backoff_base: float = 0.75,  # base backoff seconds
     backoff_cap: float = 30.0    # max backoff sleep
+    limit: int = 250             # max returns for each page in paginated responses
+    log_level: int = logging.INFO
 )
 ```
 
