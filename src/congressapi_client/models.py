@@ -1,5 +1,5 @@
-from typing import  Optional, Union, Dict, Any, List
 from dataclasses import dataclass, field
+from typing import Any, Dict, List, Optional, Union
 
 
 @dataclass
@@ -28,6 +28,7 @@ class CommitteeMeeting:
     meeting_status: Optional[str]
     date: Optional[str]
     chamber: Optional[str]
+    congress: Optional[int] = None
     # Core committees array, as seen in list+detail
     committees: List[Dict[str, Any]] = field(default_factory=list)
 
@@ -60,7 +61,7 @@ class Hearing:
     committees: List[Dict[str, str]] = field(default_factory=list)  # {"name","systemCode"}
     dates: List[str] = field(default_factory=list)                  # ISO dates
     formats: List[HearingFormat] = field(default_factory=list)      # PDF/Formatted Text
-    api_url: Optional[str] = None 
+    api_url: Optional[str] = None
     raw: Dict[str, Any] = field(default_factory=dict)
 
 
@@ -87,7 +88,7 @@ class Member:
     chamber: Optional[str] = None
     is_current: Optional[bool] = None
     roles: List[MemberRole] = field(default_factory=list)
-    api_url: Optional[str] = None 
+    api_url: Optional[str] = None
     raw: Dict[str, Any] = field(default_factory=dict)
 
 

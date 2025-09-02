@@ -80,4 +80,3 @@ CongressAPIClient(
 - List endpoints are paginated; the client auto-follows pagination.next links.
 - Retry-After (seconds or HTTP-date) is honored for 429/503.
 - For bulk pulls, consider setting min_interval (e.g., 0.1) to be a polite client.
-

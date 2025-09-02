@@ -1,32 +1,23 @@
 #%%
 from __future__ import annotations
 
-import os
+import email.utils as eut
 import json
+import logging
+import os
 import random
 import time
-import logging
-from tqdm import tqdm
-import email.utils as eut
 from datetime import datetime, timezone
-from typing import Callable, Iterator, Optional, Tuple, Union, Dict, Any, List, Set, Literal
+from typing import (Any, Callable, Dict, Iterator, List, Literal, Optional,
+                    Set, Tuple, Union)
+from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 import requests
 from requests import RequestException
-from urllib.parse import urlparse, parse_qsl, urlencode, urlunparse
 
+from .models import (Bill, BillTextVersion, Committee, CommitteeMeeting,
+                     Hearing, HearingFormat, Member, MemberRole, Subcommittee)
 from .utils import logger_setup
-from .models import (
-    Bill, BillTextVersion, Committee, CommitteeMeeting, Hearing, HearingFormat,
-    Member, MemberRole, Subcommittee
-)
-
-from dotenv import load_dotenv
-
-load_dotenv()
-
-CONGRESS_API_KEY = os.getenv("CONGRESS_API_KEY")
-
 
 #%%
 # ----------------------------------- Dataclass Definitions --------------------------------------#
@@ -101,7 +92,7 @@ class CongressAPIClient:
                 return 0.0
 
 
-            
+
     @staticmethod
     def _parse_payload(resp: requests.Response) -> Dict[str, Any]:
         """
@@ -165,7 +156,7 @@ class CongressAPIClient:
         if params:
             p.update({k: v for k, v in params.items() if v is not None})
         resp = self._request_with_backoff("GET", url, params=p)
-        return self._parse_payload(resp) 
+        return self._parse_payload(resp)
 
     def _extract_items(self, block) -> list:
         """
@@ -193,7 +184,7 @@ class CongressAPIClient:
             if isinstance(items, dict):
                 return [items]
         return []
-    
+
     # inside CongressAPI
     def _url_with_key(self, url: Optional[str]) -> Optional[str]:
         """Return URL with api_key added if it's an api.congress.gov link; pass through others/None."""
@@ -208,7 +199,7 @@ class CongressAPIClient:
             q["api_key"] = self.api_key
         new_q = urlencode(q, doseq=True)
         return urlunparse((u.scheme, u.netloc, u.path, u.params, new_q, u.fragment))
-    
+
     def _paged(self, first_path: str, data_key: str, params: Optional[Dict[str, Any]] = None):
         def _unwrap_root(d: dict) -> dict:
             # If XML, root may be wrapped as {'root': {...}}
@@ -232,43 +223,43 @@ class CongressAPIClient:
         # Check for next page
         pagination = data.get("pagination")
         self.logger.debug(f"First page pagination structure: {repr(pagination)}")
-        
+
         # Handle empty/missing pagination
         if not pagination or pagination == {}:
             self.logger.info("No pagination or empty pagination. Stopping.")
             return
-            
+
         next_url = None
         if isinstance(pagination, dict):
             next_url = pagination.get("next")
-        
+
         seen_urls = set()
         while next_url:
             self.logger.debug(f"Fetching next page: {next_url}")
             if next_url in seen_urls:
                 self.logger.warning(f"Warning: Detected repeated next_url. Breaking loop.")
                 break
-                
+
             seen_urls.add(next_url)
             next_url = self._url_with_key(next_url)
-            
+
             resp2 = self._request_with_backoff("GET", next_url)
             data = self._parse_payload(resp2)
             data = _unwrap_root(data)
             self.logger.debug(f"Next page data structure: {list(data.keys())}")
-            
+
             items = self._extract_items(data.get(data_key))
             self.logger.debug(f"Page found {len(list(items))} items")
             for item in items:
                 yield item
-                
+
             pagination = data.get("pagination")
             self.logger.debug(f"Page pagination structure: {repr(pagination)}")
-            
+
             if not pagination or pagination == {}:
                 self.logger.info("No more pages (empty pagination)")
                 break
-                
+
             next_url = None
             if isinstance(pagination, dict):
                 next_url = pagination.get("next")
@@ -431,8 +422,8 @@ class CongressAPIClient:
         out: List[Committee] = []
         for it in items:
             subs = [
-                Subcommittee(system_code=sc.get("systemCode"), 
-                             name=sc.get("name"), 
+                Subcommittee(system_code=sc.get("systemCode"),
+                             name=sc.get("name"),
                              raw=sc)
                 for sc in self._extract_items(it.get("subcommittees"))
             ] or []
@@ -454,8 +445,8 @@ class CongressAPIClient:
         data = self._get(f"committee/{chamber}/{system_code}")
         c = data.get("committee", {})
         subs = [
-                Subcommittee(system_code=sc.get("systemCode"), 
-                             name=sc.get("name"), 
+                Subcommittee(system_code=sc.get("systemCode"),
+                             name=sc.get("name"),
                              raw=sc)
                 for sc in self._extract_items(c.get("subcommittees"))
             ] or []
@@ -544,6 +535,7 @@ class CongressAPIClient:
                 meeting_status=it.get("meetingStatus"),
                 date=it.get("date"),
                 chamber=it.get("chamber"),
+                congress=it.get("congress"),
                 committees=[{"name": x.get("name"), "systemCode": x.get("systemCode")}
                             for x in self._extract_items(it.get("committees"))],
                 api_url=self._url_with_key(it.get("url")),
@@ -575,6 +567,7 @@ class CongressAPIClient:
             meeting_status=m.get("meetingStatus"),
             date=m.get("date"),
             chamber=m.get("chamber"),
+            congress=m.get("congress"),
             committees=committees,
 
             location=m.get("location"),
@@ -739,6 +732,13 @@ class CongressAPIClient:
 #%%
 
 if __name__ == "__main__":
+    from dotenv import load_dotenv
+    from tqdm import tqdm
+
+    load_dotenv()
+
+    CONGRESS_API_KEY = os.getenv("CONGRESS_API_KEY")
+
     client = CongressAPIClient(
         api_key=CONGRESS_API_KEY,
         timeout=60,
@@ -748,7 +748,7 @@ if __name__ == "__main__":
         backoff_cap=30.0    # max backoff sleep
     )
 
-    
+
     TARGETS = {"hsas00", "ssas00", "ssfr00", "hsfa00"}
 
     all_meetings = client.get_committee_meetings(congress=118, chamber="house")

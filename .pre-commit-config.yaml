@@ -1,0 +1,25 @@
+repos:
+- repo: https://github.com/pre-commit/pre-commit-hooks
+  rev: v3.4.0
+  hooks:
+  - id: trailing-whitespace
+  - id: end-of-file-fixer
+
+- repo: https://github.com/pre-commit/mirrors-isort
+  rev: v5.9.3
+  hooks:
+  - id: isort
+    name: isort
+    entry: uv run isort
+    language: python
+    types: [python]
+    always_run: true
+
+- repo: local
+  hooks:
+  - id: pytest
+    name: pytest
+    entry: bash -c "cd tests && uv run pytest"
+    language: system
+    types: [python]
+    always_run: true

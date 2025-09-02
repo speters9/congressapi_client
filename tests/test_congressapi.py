@@ -1,12 +1,12 @@
 # tests/test_congressapi.py
 import json
 import textwrap
+
 import pytest
 import requests
 import requests_mock
 
 from src.congressapi_client import CongressAPIClient
-
 
 API_BASE = "https://api.congress.gov/v3"
 
@@ -168,13 +168,13 @@ def test_pagination_and_retry_after_and_xml(client, monkeypatch):
             "pagination":{"next": f"{API_BASE}/hearing/118?page=2"}
         })
         print("[TEST] First page mock set up (JSON)")
-        
+
         # the "next" page returns XML
         m.get(f"{API_BASE}/hearing/118?page=2&api_key=test_key",
                 text=xml_payload,
                 headers={"Content-Type":"application/xml"})
         print("[TEST] Second page mock set up (XML)")
-        
+
         print("[TEST] Starting client.get_hearings(118)...")
         items = []
         for item in client.get_hearings(118):
@@ -182,7 +182,7 @@ def test_pagination_and_retry_after_and_xml(client, monkeypatch):
             items.append(item)
         print(f"[TEST] Collected {len(items)} items")
         print("[TEST] Final items:", [{"jacket_number": h.jacket_number, "raw": h.raw} for h in items])
-        
+
         assert any(h.jacket_number == 111 for h in items)
         assert any(h.jacket_number == 222 for h in items)
 
@@ -229,4 +229,3 @@ def test_committee_meeting_detail_rich(client, requests_mock):
     cm = client.get_committee_meeting(118, "house", 115281)
     assert cm.witnesses and cm.documents and cm.videos
     assert cm.related_bills and cm.related_nominations and cm.related_treaties
-
