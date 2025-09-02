@@ -15,8 +15,8 @@ import requests
 from requests import RequestException
 from urllib.parse import urlparse, parse_qsl, urlencode, urlunparse
 
-from .utils import logger_setup
-from .models import (
+from src.utils import logger_setup
+from src.models import (
     Bill, BillTextVersion, Committee, CommitteeMeeting, Hearing, HearingFormat,
     Member, MemberRole, Subcommittee
 )
