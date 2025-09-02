@@ -34,7 +34,7 @@ Entity = Literal["hearing", "committee_meeting", "committee", "bill", "member"]
 Predicate = Callable[[Dict[str, Any]], bool]
 
 
-class CongressAPI:
+class CongressAPIClient:
     """
     Typed wrapper for Congress.gov v3 API with retries/backoff and simple rate limiting.
     """
@@ -737,7 +737,7 @@ class CongressAPI:
 #%%
 
 if __name__ == "__main__":
-    client = CongressAPI(
+    client = CongressAPIClient(
         api_key=CONGRESS_API_KEY,
         timeout=60,
         min_interval=0.0,   # set e.g. 0.1 to cap at ~10 rps
