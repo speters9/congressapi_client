@@ -5,6 +5,7 @@ import os
 import json
 import random
 import time
+import logging
 from tqdm import tqdm
 import email.utils as eut
 from datetime import datetime, timezone
@@ -13,6 +14,8 @@ from typing import Callable, Iterator, Optional, Tuple, Union, Dict, Any, List, 
 import requests
 from requests import RequestException
 from urllib.parse import urlparse, parse_qsl, urlencode, urlunparse
+
+from utils.loggers import logger_setup
 
 from src.models import (
     Bill, BillTextVersion, Committee, CommitteeMeeting, Hearing, HearingFormat,
@@ -45,6 +48,8 @@ class CongressAPI:
         max_tries: int = 8,
         backoff_base: float = 0.75,
         backoff_cap: float = 30.0,
+        limit: int = 250,
+        log_level: int = logging.INFO
     ):
         self.api_key = api_key or os.getenv("CONGRESS_API_KEY") or os.getenv("CONGRESS_DOT_GOV_API_KEY")
         if not self.api_key:
@@ -63,6 +68,8 @@ class CongressAPI:
         self.max_tries = int(max_tries)
         self.backoff_base = float(backoff_base)
         self.backoff_cap = float(backoff_cap)
+        self.limit = int(limit)
+        self.logger = logger_setup(logger_name="Congress API Client", log_level=log_level)
 
     # ------------- throttling -------------
     def _gate(self) -> None:
@@ -90,6 +97,8 @@ class CongressAPI:
                 return max(0.0, (dt - datetime.now(timezone.utc)).total_seconds())
             except Exception:
                 return 0.0
+
+
             
     @staticmethod
     def _parse_payload(resp: requests.Response) -> Dict[str, Any]:
@@ -150,18 +159,20 @@ class CongressAPI:
     # ------------- core request helpers -------------
     def _get(self, path: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         url = f"{self.base_url}/{path.lstrip('/')}"
-        p = {"api_key": self.api_key}
+        p = {"api_key": self.api_key, "limit": self.limit}
         if params:
             p.update({k: v for k, v in params.items() if v is not None})
         resp = self._request_with_backoff("GET", url, params=p)
-        return self._parse_payload(resp)
+        return self._parse_payload(resp) 
 
     def _extract_items(self, block) -> list:
         """
         Normalize Congress.gov list payloads:
         - {"item": [...]} -> [...]
+        - {"item": {...}} -> [{...}]
         - [...]            -> [...]
         - {"items": [...]} -> [...]
+        - {"items": {...}} -> [{...}]
         - None/other       -> []
         """
         if block is None:
@@ -169,10 +180,16 @@ class CongressAPI:
         if isinstance(block, list):
             return block
         if isinstance(block, dict):
-            if isinstance(block.get("item"), list):
-                return block["item"]
-            if isinstance(block.get("items"), list):
-                return block["items"]
+            item = block.get("item")
+            items = block.get("items")
+            if isinstance(item, list):
+                return item
+            if isinstance(item, dict):
+                return [item]
+            if isinstance(items, list):
+                return items
+            if isinstance(items, dict):
+                return [items]
         return []
     
     # inside CongressAPI
@@ -191,17 +208,68 @@ class CongressAPI:
         return urlunparse((u.scheme, u.netloc, u.path, u.params, new_q, u.fragment))
     
     def _paged(self, first_path: str, data_key: str, params: Optional[Dict[str, Any]] = None):
+        def _unwrap_root(d: dict) -> dict:
+            # If XML, root may be wrapped as {'root': {...}}
+            if not isinstance(d, dict):
+                return d
+            if 'root' in d and isinstance(d['root'], dict):
+                return d['root']
+            return d
+
+        self.logger.info(f"Starting pagination for path: {first_path}")
         data = self._get(first_path, params=params)
-        for item in self._extract_items(data.get(data_key)):
+        data = _unwrap_root(data)
+        self.logger.info(f"First page data structure: {list(data.keys())}")
+
+        # First page items
+        items = self._extract_items(data.get(data_key))
+        self.logger.debug(f"First page found {len(list(items))} items")
+        for item in items:
             yield item
-        next_url = (data.get("pagination") or {}).get("next")
+
+        # Check for next page
+        pagination = data.get("pagination")
+        self.logger.debug(f"First page pagination structure: {repr(pagination)}")
+        
+        # Handle empty/missing pagination
+        if not pagination or pagination == {}:
+            self.logger.info("No pagination or empty pagination. Stopping.")
+            return
+            
+        next_url = None
+        if isinstance(pagination, dict):
+            next_url = pagination.get("next")
+        
+        seen_urls = set()
         while next_url:
-            next_url = self._url_with_key(next_url)     # <--- inject key if missing
+            self.logger.debug(f"Fetching next page: {next_url}")
+            if next_url in seen_urls:
+                self.logger.warning(f"Warning: Detected repeated next_url. Breaking loop.")
+                break
+                
+            seen_urls.add(next_url)
+            next_url = self._url_with_key(next_url)
+            
             resp2 = self._request_with_backoff("GET", next_url)
             data = self._parse_payload(resp2)
-            for item in self._extract_items(data.get(data_key)):
+            data = _unwrap_root(data)
+            self.logger.debug(f"Next page data structure: {list(data.keys())}")
+            
+            items = self._extract_items(data.get(data_key))
+            self.logger.debug(f"Page found {len(list(items))} items")
+            for item in items:
                 yield item
-            next_url = (data.get("pagination") or {}).get("next")
+                
+            pagination = data.get("pagination")
+            self.logger.debug(f"Page pagination structure: {repr(pagination)}")
+            
+            if not pagination or pagination == {}:
+                self.logger.info("No more pages (empty pagination)")
+                break
+                
+            next_url = None
+            if isinstance(pagination, dict):
+                next_url = pagination.get("next")
 
 
     def iter_entities(
@@ -341,6 +409,18 @@ class CongressAPI:
             else:
                 yield it
 
+    def _extract_text_list(self, block):
+        """Return a flat list of strings for blocks that arrive as list/dict."""
+        out = []
+        for it in self._extract_items(block):
+            if isinstance(it, str):
+                out.append(it)
+            elif isinstance(it, dict):
+                # prefer 'name' or 'text' keys if they exist
+                out.append(it.get("name") or it.get("text") or str(it))
+            else:
+                out.append(str(it))
+        return out
 
     # ------------- committees -------------
     def get_committees(self, congress: Optional[int] = None, chamber: Optional[str] = None) -> List[Committee]:
@@ -348,8 +428,12 @@ class CongressAPI:
         items = list(self._paged(path, data_key="committees"))
         out: List[Committee] = []
         for it in items:
-            subs = [Subcommittee(system_code=sc.get("systemCode"), name=sc.get("name"))
-                    for sc in self._extract_items(it.get("subcommittees"))] or []
+            subs = [
+                Subcommittee(system_code=sc.get("systemCode"), 
+                             name=sc.get("name"), 
+                             raw=sc)
+                for sc in self._extract_items(it.get("subcommittees"))
+            ] or []
             parent = it.get("parent") or {}
             out.append(Committee(
                 system_code=it.get("systemCode"),
@@ -367,8 +451,12 @@ class CongressAPI:
     def get_committee(self, chamber: str, system_code: str) -> Committee:
         data = self._get(f"committee/{chamber}/{system_code}")
         c = data.get("committee", {})
-        subs = [Subcommittee(system_code=sc.get("systemCode"), name=sc.get("name"))
-                for sc in self._extract_items(c.get("subcommittees"))] or []
+        subs = [
+                Subcommittee(system_code=sc.get("systemCode"), 
+                             name=sc.get("name"), 
+                             raw=sc)
+                for sc in self._extract_items(c.get("subcommittees"))
+            ] or []
         parent = c.get("parent") or {}
         return Committee(
             system_code=c.get("systemCode"),
@@ -395,8 +483,12 @@ class CongressAPI:
         for it in items:
             formats = [HearingFormat(type=f.get("type"), url=f.get("url"))
                        for f in self._extract_items(it.get("formats"))]
+            try:
+                jacket_number = int(it.get("jacketNumber"))
+            except (ValueError, TypeError):
+                jacket_number = str(it.get("jacketNumber"))
             out.append(Hearing(
-                jacket_number=it.get("jacketNumber"),
+                jacket_number=jacket_number,
                 title=it.get("title"),
                 congress=it.get("congress"),
                 chamber=it.get("chamber"),
@@ -414,8 +506,12 @@ class CongressAPI:
         h = self._get(f"hearing/{congress}/{chamber}/{jacket_number}").get("hearing", {})
         formats = [HearingFormat(type=f.get("type"), url=f.get("url"))
                    for f in self._extract_items(h.get("formats"))]
+        try:
+            jacket_number = int(h.get("jacketNumber"))
+        except (ValueError, TypeError):
+            jacket_number = str(h.get("jacketNumber"))
         return Hearing(
-            jacket_number=h.get("jacketNumber"),
+            jacket_number=jacket_number,
             title=h.get("title"),
             congress=h.get("congress"),
             chamber=h.get("chamber"),
@@ -455,6 +551,21 @@ class CongressAPI:
 
     def get_committee_meeting(self, congress: int, chamber: str, event_id: int) -> CommitteeMeeting:
         m = self._get(f"committee-meeting/{congress}/{chamber}/{event_id}").get("committeeMeeting", {})
+
+        # core committee array (name + systemCode pairs)
+        committees = [
+            {"name": x.get("name"), "systemCode": x.get("systemCode")}
+            for x in self._extract_items(m.get("committees"))
+        ]
+
+        # Optional blocks frequently present in detail payloads
+        witnesses = [w for w in self._extract_items(m.get("witnesses"))] or []
+        meeting_docs = [d for d in self._extract_items(m.get("meetingDocuments"))] or []
+        videos = [v for v in self._extract_items(m.get("videos"))] or []
+        related_bills = [b for b in self._extract_items(m.get("bills"))] or []
+        related_noms = [n for n in self._extract_items(m.get("nominations"))] or []
+        related_treaties = [t for t in self._extract_items(m.get("treaties"))] or []
+
         return CommitteeMeeting(
             event_id=m.get("eventId"),
             type=m.get("type"),
@@ -462,11 +573,21 @@ class CongressAPI:
             meeting_status=m.get("meetingStatus"),
             date=m.get("date"),
             chamber=m.get("chamber"),
-            committees=[{"name": x.get("name"), "systemCode": x.get("systemCode")}
-                        for x in self._extract_items(m.get("committees"))],
+            committees=committees,
+
+            location=m.get("location"),
+            room=m.get("room"),
+            witnesses=witnesses,
+            documents=meeting_docs,
+            videos=videos,
+            related_bills=related_bills,
+            related_nominations=related_noms,
+            related_treaties=related_treaties,
+
             api_url=self._url_with_key(m.get("url")),
             raw=m,
         )
+
 
     # ------------- members -------------
     def get_members(
@@ -628,14 +749,16 @@ if __name__ == "__main__":
     
     TARGETS = {"hsas00", "ssas00", "ssfr00", "hsfa00"}
 
-    all_hearings = client.get_hearings(congress=118, chamber="house")
-    hearings_to_keep = []
-    for i, h in enumerate(tqdm(all_hearings)):
-        full = client.get_hearing(h.congress, h.chamber.lower(), h.jacket_number)
+    all_meetings = client.get_committee_meetings(congress=118, chamber="house")
+    meetings_to_keep = []
+
+    #%%
+    for i, h in enumerate(tqdm(all_meetings)):
+        full = client.get_meeting(h.congress, h.chamber.lower(), h.jacket_number)
         if any(c["systemCode"] in TARGETS for c in full.committees):
             for f in full.formats:
                 if f.type in ("PDF", "Formatted Text"):
-                    hearings_to_keep.append({
+                    meetings_to_keep.append({
                         "title": full.title,
                         "url": f.url,
                         "committee": full.committees

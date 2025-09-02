@@ -9,7 +9,9 @@ license = { text = "MIT" }
 
 dependencies = [
     "notebook>=7.4.5",
+    "pytest>=8.4.1",
     "python-dotenv>=1.1.1",
+    "requests-mock>=1.12.1",
     "requests>=2.31",
     "tqdm>=4.67.1",
     "xmltodict>=0.14.2",

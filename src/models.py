@@ -1,26 +1,49 @@
 from __future__ import annotations
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 
 @dataclass
 class Subcommittee:
-    system_code: str
-    name: str
-
+    system_code: Optional[str]
+    name: Optional[str]
+    raw: Dict[str, Any] = field(default_factory=dict)
 
 @dataclass
 class Committee:
-    system_code: str
-    name: str
-    chamber: Optional[str] = None
-    committee_type: Optional[str] = None
-    parent_system_code: Optional[str] = None
-    parent_name: Optional[str] = None
+    system_code: Optional[str]
+    name: Optional[str]
+    chamber: Optional[str]                    # present on list payloads
+    committee_type: Optional[str]             # committeeTypeCode on list payloads
+    parent_system_code: Optional[str]
+    parent_name: Optional[str]
     subcommittees: List[Subcommittee] = field(default_factory=list)
-    api_url: Optional[str] = None 
+    api_url: Optional[str] = None
     raw: Dict[str, Any] = field(default_factory=dict)
 
+@dataclass
+class CommitteeMeeting:
+    event_id: Optional[int]
+    type: Optional[str]
+    title: Optional[str]
+    meeting_status: Optional[str]
+    date: Optional[str]
+    chamber: Optional[str]
+    # Core committees array, as seen in list+detail
+    committees: List[Dict[str, Any]] = field(default_factory=list)
+
+    # Detail-only enrichments (map them when present):
+    location: Optional[str] = None            # sometimes a separate field
+    room: Optional[str] = None                # sometimes present
+    witnesses: List[Dict[str, Any]] = field(default_factory=list)
+    documents: List[Dict[str, Any]] = field(default_factory=list)   # meetingDocuments or similar
+    videos: List[Dict[str, Any]] = field(default_factory=list)      # video links/ids
+    related_bills: List[Dict[str, Any]] = field(default_factory=list)
+    related_nominations: List[Dict[str, Any]] = field(default_factory=list)
+    related_treaties: List[Dict[str, Any]] = field(default_factory=list)
+
+    api_url: Optional[str] = None
+    raw: Dict[str, Any] = field(default_factory=dict)
 
 @dataclass
 class HearingFormat:
@@ -30,7 +53,7 @@ class HearingFormat:
 
 @dataclass
 class Hearing:
-    jacket_number: int
+    jacket_number: Union[int, str]  # Can be either integer or string
     title: Optional[str] = None
     congress: Optional[int] = None
     chamber: Optional[str] = None
@@ -38,19 +61,6 @@ class Hearing:
     committees: List[Dict[str, str]] = field(default_factory=list)  # {"name","systemCode"}
     dates: List[str] = field(default_factory=list)                  # ISO dates
     formats: List[HearingFormat] = field(default_factory=list)      # PDF/Formatted Text
-    api_url: Optional[str] = None 
-    raw: Dict[str, Any] = field(default_factory=dict)
-
-
-@dataclass
-class CommitteeMeeting:
-    event_id: int
-    type: Optional[str] = None
-    title: Optional[str] = None
-    meeting_status: Optional[str] = None
-    date: Optional[str] = None
-    chamber: Optional[str] = None
-    committees: List[Dict[str, str]] = field(default_factory=list)
     api_url: Optional[str] = None 
     raw: Dict[str, Any] = field(default_factory=dict)
 
