@@ -33,6 +33,7 @@ class CommitteeMeeting:
     committees: List[Dict[str, Any]] = field(default_factory=list)
 
     # Detail-only enrichments (map them when present):
+    hearing_transcript: Optional[dict] = None
     location: Optional[str] = None            # sometimes a separate field
     room: Optional[str] = None                # sometimes present
     witnesses: List[Dict[str, Any]] = field(default_factory=list)

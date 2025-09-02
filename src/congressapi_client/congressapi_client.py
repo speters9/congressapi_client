@@ -572,6 +572,7 @@ class CongressAPIClient:
 
             location=m.get("location"),
             room=m.get("room"),
+            hearing_transcript=m.get("hearingTranscript"),
             witnesses=witnesses,
             documents=meeting_docs,
             videos=videos,
