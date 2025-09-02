@@ -15,8 +15,7 @@ import requests
 from requests import RequestException
 from urllib.parse import urlparse, parse_qsl, urlencode, urlunparse
 
-from utils.loggers import logger_setup
-
+from src.utils import logger_setup
 from src.models import (
     Bill, BillTextVersion, Committee, CommitteeMeeting, Hearing, HearingFormat,
     Member, MemberRole, Subcommittee
@@ -30,8 +29,11 @@ CONGRESS_API_KEY = os.getenv("CONGRESS_API_KEY")
 
 
 #%%
+# ----------------------------------- Dataclass Definitions --------------------------------------#
+
 Entity = Literal["hearing", "committee_meeting", "committee", "bill", "member"]
 Predicate = Callable[[Dict[str, Any]], bool]
+
 
 
 class CongressAPIClient:

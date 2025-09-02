@@ -5,14 +5,15 @@ import pytest
 import requests
 import requests_mock
 
-from src.congressapi_client import CongressAPI
+from src.congressapi_client import CongressAPIClient
+
 
 API_BASE = "https://api.congress.gov/v3"
 
 @pytest.fixture
 def client(monkeypatch):
     monkeypatch.setenv("CONGRESS_API_KEY", "test_key")
-    return CongressAPI()
+    return CongressAPIClient()
 
 def test_url_with_key(client):
     u = client._url_with_key(f"{API_BASE}/hearing/118/house/12345")
