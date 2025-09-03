@@ -121,7 +121,9 @@ class CongressAPIClient:
     def _sleep_backoff(self, attempt: int) -> None:
         # Full jitter: sleep in [0, min(cap, base * 2**attempt)]
         upper = min(self.backoff_cap, self.backoff_base * (2 ** attempt))
-        time.sleep(random.uniform(0, upper))
+        sleep_time = random.uniform(0, upper)
+        self.logger.info(f"Backoff: sleeping for {sleep_time:.2f} seconds on attempt {attempt+1} (max {self.max_tries})")
+        time.sleep(sleep_time)
 
     def _request_with_backoff(self, method: str, url: str, *, params: dict | None = None) -> requests.Response:
         last_exc: Optional[Exception] = None
@@ -132,8 +134,10 @@ class CongressAPIClient:
                 if 200 <= resp.status_code < 300:
                     return resp
                 if resp.status_code in (429, 500, 502, 503, 504):
+                    self.logger.warning(f"API request to {url} failed with status {resp.status_code}: {resp.text[:200]}")
                     ra = self._parse_retry_after(resp.headers.get("Retry-After", ""))
                     if ra > 0:
+                        self.logger.info(f"Sleeping for {ra:.2f} seconds.")
                         time.sleep(ra)
                     else:
                         self._sleep_backoff(attempt)
@@ -143,6 +147,7 @@ class CongressAPIClient:
                 return resp
             except (requests.ConnectionError, requests.Timeout, RequestException) as e:
                 last_exc = e
+                self.logger.warning(f"Request error on attempt {attempt+1}/{self.max_tries}: {type(e).__name__}: {e}")
                 self._sleep_backoff(attempt)
                 continue
         if isinstance(last_exc, requests.HTTPError):
