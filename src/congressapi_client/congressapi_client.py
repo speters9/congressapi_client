@@ -451,9 +451,13 @@ class CongressAPIClient:
                 for sc in self._extract_items(c.get("subcommittees"))
             ] or []
         parent = c.get("parent") or {}
+        name = c.get("name")
+        if name is None:
+            history = c.get("history", [])
+            name = next((h.get("libraryOfCongressName") for h in history if h.get("startDate") and not h.get("endDate")), None)
         return Committee(
             system_code=c.get("systemCode"),
-            name=c.get("name"),
+            name=name,
             chamber=None,
             committee_type=None,
             parent_system_code=parent.get("systemCode"),
