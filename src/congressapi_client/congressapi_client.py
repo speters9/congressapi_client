@@ -214,10 +214,10 @@ class CongressAPIClient:
                 return d['root']
             return d
 
-        self.logger.info(f"Starting pagination for path: {first_path}")
+        self.logger.debug(f"Starting pagination for path: {first_path}")
         data = self._get(first_path, params=params)
         data = _unwrap_root(data)
-        self.logger.info(f"First page data structure: {list(data.keys())}")
+        self.logger.debug(f"First page data structure: {list(data.keys())}")
 
         # First page items
         items = self._extract_items(data.get(data_key))
