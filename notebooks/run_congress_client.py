@@ -18,7 +18,7 @@ client = CongressAPIClient(
     min_interval=0.0,   # set e.g. 0.1 to cap at ~10 rps
     max_tries=8,          # retry attempts for 429/5xx/timeouts
     backoff_base=0.75,  # base backoff seconds
-    backoff_cap=30.0    # max backoff sleep
+    backoff_cap=30.0,    # max backoff sleep,
 )
 
 #%%

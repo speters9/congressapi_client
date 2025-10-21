@@ -38,12 +38,14 @@ class CongressAPIClient:
         api_key: Optional[str] = None,
         base_url: str = "https://api.congress.gov/v3",
         timeout: int = 60,
-        min_interval: float = 0.1,  # 100ms between requests (politeness throttle)
+        min_interval: float = 0.1,  # politeness throttle
         max_tries: int = 8,
-        backoff_base: float = 1.0,  # More conservative backoff
+        backoff_base: float = 0.75,  # More conservative backoff
         backoff_cap: float = 60.0,  # Higher cap for severe rate limiting
-        limit: int = 250,
-        log_level: int = logging.INFO
+        limit: int = 250, # number to return
+        log_level: int = logging.INFO,
+        req_per_hour: int = 5000,
+        rph_margin = 0.01, # reduce max requests per hour by 1% (ie 50) given requests tend to be bundled
     ):
         self.api_key = api_key or os.getenv("CONGRESS_API_KEY") or os.getenv("CONGRESS_DOT_GOV_API_KEY")
         if not self.api_key:
@@ -65,15 +67,60 @@ class CongressAPIClient:
         self.limit = int(limit)
         self.logger = logger_setup(logger_name="Congress API Client", log_level=log_level)
 
+        # set rate limit throttling
+        if not (0.0 <= rph_margin < 1.0):
+            raise ValueError(f"rph_margin must be in [0,1). Got {rph_margin}.")
+        self.rph_margin = float(rph_margin)
+        self.req_per_hour = int(req_per_hour)
+
+        effective_limit = max(1, int(self.req_per_hour * (1.0 - self.rph_margin)))
+        self.hourly_capacity = effective_limit                    # integer bucket size
+        self.hourly_refill_rate = float(effective_limit) / 3600.0 # tokens per second
+
+        # monotonic clock for continuous upward counting
+        self._last_call = time.monotonic()
+        self._last_refill = time.monotonic()
+        self._tokens = float(self.hourly_capacity)  # start full
+
+
     # ------------- throttling -------------
     def _gate(self) -> None:
-        if self.min_interval <= 0:
+        # politeness throttle
+        if self.min_interval > 0.0:
+            now_m = time.monotonic()
+            last = getattr(self, "_last_call", now_m)
+            wait = self.min_interval - (now_m - last)
+            if wait > 0:
+                time.sleep(wait)
+                now_m = time.monotonic()
+            self._last_call = now_m
+
+        # hourly token bucket (api limits at 5000/hr, but buffer built in)
+        if self.hourly_refill_rate <= 0 or self.hourly_capacity <= 0:
             return
-        now = time.time()
-        wait = self.min_interval - (now - self._last_call_ts)
-        if wait > 0:
-            time.sleep(wait)
-        self._last_call_ts = time.time()
+
+        prev_refill = getattr(self, "_last_refill", time.monotonic())
+        now_m = time.monotonic()
+
+        # Refill based on time since last refill (do not mutate _last_refill yet)
+        elapsed = now_m - prev_refill
+        tokens = min(self.hourly_capacity, self._tokens + elapsed * self.hourly_refill_rate)
+
+        # If short a token, sleep just enough, then recompute refill once
+        if tokens < 1.0:
+            need = 1.0 - tokens
+            sleep_s = need / self.hourly_refill_rate
+            if sleep_s > 0:
+                self.logger.info(f"Hourly budget nearly exhausted; sleeping ~{sleep_s/60:.2f} minutes.")
+                time.sleep(sleep_s)
+            now_m = time.monotonic()
+            elapsed = now_m - prev_refill
+            tokens = min(self.hourly_capacity, self._tokens + elapsed * self.hourly_refill_rate)
+
+        # Consume one token and commit state
+        self._tokens = max(0.0, tokens - 1.0)
+        self._last_refill = now_m
+
 
     # ------------- backoff helpers -------------
     @staticmethod
