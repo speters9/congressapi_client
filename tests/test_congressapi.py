@@ -7,6 +7,7 @@ import requests
 import requests_mock
 
 from src.congressapi_client import CongressAPIClient
+from src.congressapi_client.models import Member
 
 API_BASE = "https://api.congress.gov/v3"
 
@@ -328,12 +329,21 @@ def test_bill_cosponsors(client, requests_mock):
     assert bill.legislation_url == "https://congress.gov/bill/117th-congress/house-bill/3076"
     assert bill.update_date == "2022-09-29T03:27:05Z"
 
+    # Test sponsors consolidation - should merge sponsor and sponsors fields into Member objects
+    assert len(bill.sponsors) == 1  # Should consolidate sponsor + sponsors fields
+    sponsor = bill.sponsors[0]
+    assert isinstance(sponsor, Member)  # Should be Member object
+    assert sponsor.bioguide_id == "M000087"
+    assert sponsor.first_name == "CAROLYN"
+    assert sponsor.last_name == "MALONEY"
+
     # Test bill detail with cosponsors
     bill_with_cosponsors = client.get_bill(117, "hr", 3076, hydrate=True)
     assert len(bill_with_cosponsors.cosponsors) == 2
 
     # Check first cosponsor
     cosponsor1 = bill_with_cosponsors.cosponsors[0]
+    assert isinstance(cosponsor1, Member)  # Should be Member object
     assert cosponsor1.bioguide_id == "S000185"
     assert cosponsor1.full_name == "Rep. Scott, Robert C. [D-VA-3]"
     assert cosponsor1.party == "D"
@@ -350,3 +360,216 @@ def test_bill_cosponsors(client, requests_mock):
     cosponsors = client.get_bill_cosponsors(117, "hr", 3076)
     assert len(cosponsors) == 2
     assert all(c.bioguide_id for c in cosponsors)
+
+def test_amendment_cosponsors(client, requests_mock):
+    # Test getting amendment detail with cosponsorship summary
+    amendment_url = f"{API_BASE}/amendment/118/samdt/1123"
+    requests_mock.get(amendment_url, json={
+        "amendment": {
+            "congress": 118,
+            "type": "samdt",
+            "number": 1123,
+            "description": "An amendment to improve the bill",
+            "purpose": "To enhance provisions relating to congressional oversight",
+            "chamber": "Senate",
+            "proposedDate": "2023-07-15",
+            "submittedDate": "2023-07-16",
+            "amendedBill": {
+                "congress": 118,
+                "type": "hr",
+                "number": "815",
+                "title": "Lower Energy Costs Act"
+            },
+            "latestAction": {
+                "actionDate": "2023-07-20",
+                "text": "Amendment SA 1123 agreed to in Senate by Voice Vote."
+            },
+            "sponsors": [{"bioguideId": "C000880", "firstName": "Mike", "lastName": "Crapo"}],
+            "cosponsors": {
+                "count": 5,
+                "countIncludingWithdrawnCosponsors": 6,
+                "url": f"{API_BASE}/amendment/118/samdt/1123/cosponsors"
+            },
+            "actions": {
+                "count": 3,
+                "url": f"{API_BASE}/amendment/118/samdt/1123/actions"
+            },
+            "textVersions": {
+                "count": 1,
+                "url": f"{API_BASE}/amendment/118/samdt/1123/text"
+            },
+            "updateDate": "2023-07-21T10:30:00Z",
+            "url": amendment_url
+        }
+    })
+
+    # Test getting full amendment cosponsors list
+    cosponsors_url = f"{API_BASE}/amendment/118/samdt/1123/cosponsors"
+    requests_mock.get(cosponsors_url, json={
+        "cosponsors": {"item": [
+            {
+                "bioguideId": "T000250",
+                "firstName": "John",
+                "lastName": "Thune",
+                "fullName": "Sen. Thune, John [R-SD]",
+                "party": "R",
+                "state": "SD",
+                "sponsorshipDate": "2023-07-15",
+                "isOriginalCosponsor": True,
+                "url": f"{API_BASE}/member/T000250"
+            },
+            {
+                "bioguideId": "B000575",
+                "firstName": "Roy",
+                "lastName": "Blunt",
+                "fullName": "Sen. Blunt, Roy [R-MO]",
+                "party": "R",
+                "state": "MO",
+                "sponsorshipDate": "2023-07-16",
+                "sponsorshipWithdrawnDate": "2023-07-18",
+                "isOriginalCosponsor": False,
+                "url": f"{API_BASE}/member/B000575"
+            }
+        ]}
+    })
+
+    # Test amendment detail without cosponsors (no hydration)
+    amendment = client.get_amendment(118, "samdt", 1123)
+    assert amendment.congress == 118
+    assert amendment.amendment_type == "samdt"
+    assert amendment.amendment_number == 1123
+    assert amendment.description == "An amendment to improve the bill"
+    assert amendment.chamber == "Senate"
+    assert amendment.proposed_date == "2023-07-15"
+    assert amendment.submitted_date == "2023-07-16"
+    assert amendment.amended_bill["type"] == "hr"
+    assert amendment.amended_bill["number"] == "815"
+    assert amendment.cosponsors_count == 5
+    assert amendment.cosponsors_count_including_withdrawn == 6
+    assert amendment.text_count == 1
+    assert len(amendment.cosponsors) == 0  # Not fetched by default
+
+    # Test amendment sponsors are converted to Member objects
+    assert len(amendment.sponsors) == 1
+    sponsor = amendment.sponsors[0]
+    assert isinstance(sponsor, Member)  # Should be Member object
+    assert sponsor.bioguide_id == "C000880"
+    assert sponsor.first_name == "Mike"
+    assert sponsor.last_name == "Crapo"
+
+    # Test amendment detail with cosponsors (with hydration)
+    amendment_with_cosponsors = client.get_amendment(118, "samdt", 1123, hydrate=True)
+    assert len(amendment_with_cosponsors.cosponsors) == 2
+
+    # Check first cosponsor
+    cosponsor1 = amendment_with_cosponsors.cosponsors[0]
+    assert isinstance(cosponsor1, Member)  # Should be Member object
+    assert cosponsor1.bioguide_id == "T000250"
+    assert cosponsor1.full_name == "Sen. Thune, John [R-SD]"
+    assert cosponsor1.party == "R"
+    assert cosponsor1.state == "SD"
+    assert cosponsor1.is_original_cosponsor is True
+    assert cosponsor1.sponsorship_withdrawn_date is None
+
+    # Check second cosponsor (withdrawn)
+    cosponsor2 = amendment_with_cosponsors.cosponsors[1]
+    assert cosponsor2.bioguide_id == "B000575"
+    assert cosponsor2.sponsorship_withdrawn_date == "2023-07-18"
+    assert cosponsor2.is_original_cosponsor is False
+
+    # Test getting amendment cosponsors directly
+    cosponsors = client.get_amendment_cosponsors(118, "samdt", 1123)
+    assert len(cosponsors) == 2
+    assert all(c.bioguide_id for c in cosponsors)
+
+def test_bill_amendments_with_cosponsors(client, requests_mock):
+    # Test getting bill amendments with full cosponsor hydration
+    bill_amendments_url = f"{API_BASE}/bill/118/hr/815/amendments"
+    requests_mock.get(bill_amendments_url, json={
+        "amendments": {"item": [
+            {
+                "congress": 118,
+                "type": "samdt",
+                "number": 1123,
+                "description": "An amendment to improve the bill",
+                "purpose": "To enhance provisions",
+                "latestAction": {
+                    "actionDate": "2023-07-20",
+                    "text": "Amendment agreed to"
+                },
+                "updateDate": "2023-07-21T10:30:00Z",
+                "url": f"{API_BASE}/amendment/118/samdt/1123"
+            }
+        ]}
+    })
+
+    # Mock the individual amendment detail call (used during hydration)
+    amendment_detail_url = f"{API_BASE}/amendment/118/samdt/1123"
+    requests_mock.get(amendment_detail_url, json={
+        "amendment": {
+            "congress": 118,
+            "type": "samdt",
+            "number": 1123,
+            "description": "An amendment to improve the bill",
+            "purpose": "To enhance provisions",
+            "chamber": "Senate",
+            "proposedDate": "2023-07-15",
+            "submittedDate": "2023-07-16",
+            "amendedBill": {
+                "congress": 118,
+                "type": "hr",
+                "number": "815"
+            },
+            "latestAction": {
+                "actionDate": "2023-07-20",
+                "text": "Amendment agreed to"
+            },
+            "sponsors": [{"bioguideId": "C000880", "firstName": "Mike", "lastName": "Crapo"}],
+            "cosponsors": {
+                "count": 2,
+                "url": f"{API_BASE}/amendment/118/samdt/1123/cosponsors"
+            },
+            "updateDate": "2023-07-21T10:30:00Z",
+            "url": amendment_detail_url
+        }
+    })
+
+    # Mock the amendment cosponsors call
+    amendment_cosponsors_url = f"{API_BASE}/amendment/118/samdt/1123/cosponsors"
+    requests_mock.get(amendment_cosponsors_url, json={
+        "cosponsors": {"item": [
+            {
+                "bioguideId": "T000250",
+                "firstName": "John",
+                "lastName": "Thune",
+                "fullName": "Sen. Thune, John [R-SD]",
+                "party": "R",
+                "state": "SD",
+                "sponsorshipDate": "2023-07-15",
+                "isOriginalCosponsor": True
+            }
+        ]}
+    })
+
+    # Test bill amendments without hydration (summary data only)
+    amendments = client.get_bill_amendments(118, "hr", 815)
+    assert len(amendments) == 1
+    amendment = amendments[0]
+    assert amendment.amendment_type == "samdt"
+    assert amendment.amendment_number == 1123
+    assert len(amendment.cosponsors) == 0  # No cosponsors in summary
+    assert amendment.chamber is None  # No chamber in summary
+
+    # Test bill amendments with hydration (full details including cosponsors)
+    amendments_hydrated = client.get_bill_amendments(118, "hr", 815, hydrate=True)
+    assert len(amendments_hydrated) == 1
+    amendment_hydrated = amendments_hydrated[0]
+    assert amendment_hydrated.amendment_type == "samdt"
+    assert amendment_hydrated.amendment_number == 1123
+    assert amendment_hydrated.chamber == "Senate"  # Available with hydration
+    assert amendment_hydrated.proposed_date == "2023-07-15"  # Available with hydration
+    assert len(amendment_hydrated.cosponsors) == 1  # Cosponsors fetched with hydration
+
+    cosponsor = amendment_hydrated.cosponsors[0]
+    assert cosponsor.bioguide_id == "T000250"
+    assert cosponsor.full_name == "Sen. Thune, John [R-SD]"

@@ -15,15 +15,15 @@ from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 import requests
 from requests import RequestException
 
-from .models import (Bill, BillTextVersion, Committee, CommitteeMeeting,
-                     Cosponsor, Hearing, HearingFormat, Member, MemberRole,
-                     Subcommittee)
+from .models import (Amendment, Bill, BillTextVersion, Committee,
+                     CommitteeMeeting, Hearing, HearingFormat, Member,
+                     MemberRole, Subcommittee)
 from .utils import logger_setup
 
 #%%
 # ----------------------------------- Dataclass Definitions --------------------------------------#
 
-Entity = Literal["hearing", "committee_meeting", "committee", "bill", "member"]
+Entity = Literal["hearing", "committee_meeting", "committee", "bill", "member", "amendment"]
 Predicate = Callable[[Dict[str, Any]], bool]
 
 
@@ -206,6 +206,28 @@ class CongressAPIClient:
         new_q = urlencode(q, doseq=True)
         return urlunparse((u.scheme, u.netloc, u.path, u.params, new_q, u.fragment))
 
+    def _dict_to_member(self, member_dict: Dict[str, Any], *,
+                       sponsorship_date: Optional[str] = None,
+                       sponsorship_withdrawn_date: Optional[str] = None,
+                       is_original_cosponsor: Optional[bool] = None) -> Member:
+        """Convert a member dictionary from API response to Member object."""
+        return Member(
+            bioguide_id=member_dict.get("bioguideId"),
+            first_name=member_dict.get("firstName"),
+            middle_name=member_dict.get("middleName"),
+            last_name=member_dict.get("lastName"),
+            full_name=member_dict.get("fullName"),
+            party=member_dict.get("party"),
+            state=member_dict.get("state"),
+            district=member_dict.get("district"),
+            # Add sponsorship metadata if provided
+            sponsorship_date=sponsorship_date,
+            sponsorship_withdrawn_date=sponsorship_withdrawn_date,
+            is_original_cosponsor=is_original_cosponsor,
+            api_url=self._url_with_key(member_dict.get("url")),
+            raw=member_dict
+        )
+
     def _paged(self, first_path: str, data_key: str, params: Optional[Dict[str, Any]] = None):
         def _unwrap_root(d: dict) -> dict:
             # If XML, root may be wrapped as {'root': {...}}
@@ -285,6 +307,8 @@ class CongressAPIClient:
         introduced_start: Optional[str] = None,
         introduced_end: Optional[str] = None,
         include_cosponsors: bool = False,  # For bills, whether to fetch full cosponsors list during hydration
+        # amendments-specific optional params
+        amendment_type: Optional[str] = None,  # "hamdt", "samdt", etc.
         # members-specific optional params
         state: Optional[str] = None,
         district: Optional[str] = None,
@@ -293,12 +317,12 @@ class CongressAPIClient:
         """
         Stream entities with optional detail hydration and predicate filtering.
 
-        - entity: one of "hearing", "committee_meeting", "committee", "bill", "member"
+        - entity: one of "hearing", "committee_meeting", "committee", "bill", "member", "amendment"
         - where: a function(dict) -> bool; applied to list item (fast) or detail (if hydrate=True)
-        - hydrate: if True, fetch detail and return a typed object (Hearing, CommitteeMeeting, Committee, Bill, Member)
+        - hydrate: if True, fetch detail and return a typed object (Hearing, CommitteeMeeting, Committee, Bill, Member, Amendment)
                 otherwise return the raw list item dict (fast).
-        - congress_range: (start, end), inclusive, for entities that list by congress (hearing/committee_meeting/bill)
-        - include_cosponsors: for bills, whether to fetch full cosponsors list during hydration (slower but complete)
+        - congress_range: (start, end), inclusive, for entities that list by congress (hearing/committee_meeting/bill/amendment)
+        - include_cosponsors: for bills/amendments, whether to fetch full cosponsors list during hydration (slower but complete)
         """
         def _range(cg: Optional[int], cgr: Optional[Tuple[int, int]]) -> List[int]:
             if cgr and len(cgr) == 2:
@@ -324,6 +348,13 @@ class CongressAPIClient:
                 if introduced_start: params["introducedDateStart"] = introduced_start
                 if introduced_end:   params["introducedDateEnd"]   = introduced_end
                 yield from self._paged(path, data_key="bills", params=params)
+            elif entity == "amendment":
+                if amendment_type:
+                    path = f"amendment/{target_congress}/{amendment_type}"
+                else:
+                    path = f"amendment/{target_congress}"
+                params = {}
+                yield from self._paged(path, data_key="amendments", params=params)
             else:
                 raise ValueError(f"Entity '{entity}' does not support congress-scoped listing.")
 
@@ -348,7 +379,7 @@ class CongressAPIClient:
 
         # Choose listing strategy
         list_stream: Iterator[Dict[str, Any]]
-        if entity in ("hearing", "committee_meeting", "bill"):
+        if entity in ("hearing", "committee_meeting", "bill", "amendment"):
             congresses = _range(congress, congress_range) or ([congress] if congress else [])
             if not congresses:
                 raise ValueError(f"Provide congress or congress_range for entity '{entity}'.")
@@ -385,6 +416,12 @@ class CongressAPIClient:
                 bid = item.get("bioguideId")
                 if not bid: return None
                 return self.get_member(bid)
+            if entity == "amendment":
+                cg = item.get("congress")
+                at = item.get("type")
+                num = item.get("number")
+                if not (cg and at and num): return None
+                return self.get_amendment(cg, at, num, hydrate=include_cosponsors)
             return None
 
         # Stream + (optional) filter + (optional) hydrate
@@ -715,7 +752,116 @@ class CongressAPIClient:
             raw=m,
         )
 
-    # ------------- legislation (bills) -------------
+    # ------------- legislation (bills and amendments) -------------
+    def get_bill(self, congress: int, bill_type: str, bill_number: int, *, hydrate: bool = False) -> Bill:
+        """
+        Fetch detailed information for a specific bill.
+
+        Args:
+            congress: Congress number (e.g., 117)
+            bill_type: Bill type ("hr", "s", "hjres", "sjres", etc.)
+            bill_number: Bill number
+            hydrate: If True, fetch additional related data like full cosponsors list
+        """
+        # Ensure bill_type is lowercase for API endpoint
+        bill_type_lower = bill_type.lower()
+        b = self._get(f"bill/{congress}/{bill_type_lower}/{bill_number}").get("bill", {})
+        texts = [
+            BillTextVersion(type=tv.get("type"), url=tv.get("url"), date=tv.get("date"), raw=tv)
+            for tv in self._extract_items(b.get("textVersions"))
+        ]
+
+        # Extract cosponsorship info from the bill data
+        cosponsors_info = b.get("cosponsors", {})
+        cosponsors_count = cosponsors_info.get("count")
+        cosponsors_count_including_withdrawn = cosponsors_info.get("countIncludingWithdrawnCosponsors")
+        cosponsors_url = self._url_with_key(cosponsors_info.get("url"))
+
+        # Extract latest action info
+        latest_action_info = b.get("latestAction", {})
+        latest_action_text = latest_action_info.get("text")
+        latest_action_date = latest_action_info.get("actionDate")
+
+        # Extract policy area
+        policy_area = b.get("policyArea")
+
+        # Extract related content URLs and counts
+        actions_info = b.get("actions", {})
+        amendments_info = b.get("amendments", {})
+        committees_info = b.get("committees", {})
+        related_bills_info = b.get("relatedBills", {})
+        subjects_info = b.get("subjects", {})
+        summaries_info = b.get("summaries", {})
+        titles_info = b.get("titles", {})
+
+        # Handle sponsors (consolidate 'sponsor' and 'sponsors' fields into sponsors list)
+        sponsors = []
+
+        # Add from 'sponsors' field (list)
+        sponsors_list = self._extract_items(b.get("sponsors"))
+        if sponsors_list:
+            sponsors.extend([self._dict_to_member(s) for s in sponsors_list])
+
+        # Add from 'sponsor' field (single object) if not already in sponsors list
+        sponsor_obj = b.get("sponsor")
+        if sponsor_obj and sponsor_obj not in sponsors_list:
+            sponsors.append(self._dict_to_member(sponsor_obj))
+
+        # Optionally fetch full cosponsors and amendments lists
+        cosponsors = []
+        amendments = []
+        if hydrate:
+            if cosponsors_url:
+                cosponsors = self.get_bill_cosponsors(congress, bill_type_lower, bill_number)
+            amendments_url = self._url_with_key(amendments_info.get("url"))
+            if amendments_url:
+                # Fetch full amendment details with sponsors/cosponsors
+                amendments = self.get_bill_amendments(congress, bill_type_lower, bill_number, hydrate=True)
+
+        return Bill(
+            congress=b.get("congress"),
+            bill_type=b.get("type") or b.get("billType"),
+            bill_number=b.get("number"),
+            title=b.get("title"),
+            introduced_date=b.get("introducedDate"),
+            origin_chamber=b.get("originChamber"),
+            origin_chamber_code=b.get("originChamberCode"),
+            latest_action=latest_action_text,
+            latest_action_date=latest_action_date,
+            sponsors=sponsors,
+            policy_area=policy_area,
+            laws=self._extract_items(b.get("laws")),
+            constitutional_authority_statement=b.get("constitutionalAuthorityStatementText"),
+            cbo_cost_estimates=self._extract_items(b.get("cboCostEstimates")),
+            committee_reports=self._extract_items(b.get("committeeReports")),
+            cosponsors_count=cosponsors_count,
+            cosponsors_count_including_withdrawn=cosponsors_count_including_withdrawn,
+            cosponsors=cosponsors,
+            cosponsors_url=cosponsors_url,
+            actions_url=self._url_with_key(actions_info.get("url")),
+            actions_count=actions_info.get("count"),
+            amendments_url=self._url_with_key(amendments_info.get("url")),
+            amendments_count=amendments_info.get("count"),
+            committees_url=self._url_with_key(committees_info.get("url")),
+            committees_count=committees_info.get("count"),
+            related_bills_url=self._url_with_key(related_bills_info.get("url")),
+            related_bills_count=related_bills_info.get("count"),
+            subjects_url=self._url_with_key(subjects_info.get("url")),
+            subjects_count=subjects_info.get("count"),
+            summaries_url=self._url_with_key(summaries_info.get("url")),
+            summaries_count=summaries_info.get("count"),
+            titles_url=self._url_with_key(titles_info.get("url")),
+            titles_count=titles_info.get("count"),
+            amendments=amendments,
+            legislation_url=b.get("legislationUrl"),
+            urls=[u for u in [b.get("url")] if u],
+            texts=texts,
+            update_date=b.get("updateDate"),
+            update_date_including_text=b.get("updateDateIncludingText"),
+            api_url=self._url_with_key(b.get("url")) or f"{self.base_url}/bill/{congress}/{bill_type_lower}/{bill_number}?api_key={self.api_key}",
+            raw=b,
+        )
+
     def get_bills(
         self,
         congress: Optional[int] = None,
@@ -727,6 +873,7 @@ class CongressAPIClient:
         hydrate: bool = False,  # If True, fetch full cosponsors for each bill (much slower)
         hydrate_delay: float = 0.5,  # Seconds to sleep between hydrated requests to avoid rate limits
         limit: Optional[int] = None,  # Maximum number of bills to return (None = all available)
+        verbose: bool = False
     ) -> List[Bill]:
         """
         Fetch a list of bills with optional filtering.
@@ -740,6 +887,7 @@ class CongressAPIClient:
             hydrate: If True, fetch full bill data for each bill (MUCH SLOWER - makes individual API calls)
             hydrate_delay: Seconds to sleep between hydrated requests (default 0.5s to avoid rate limits)
             limit: Maximum number of bills to return (None = all available)
+            verbose: How much logging is done
 
         Returns:
             List of Bill objects. If hydrate=False, only basic fields are populated.
@@ -784,7 +932,8 @@ class CongressAPIClient:
                     # Add extra delay for hydrated requests to avoid rate limits
                     # Since we're making individual API calls for each bill
                     if i > 0:  # Don't sleep before first request
-                        self.logger.info(f"Hydrated request {i+1}/{len(items)}: sleeping {hydrate_delay}s to respect rate limits")
+                        if verbose:
+                            self.logger.info(f"Hydrated request {i+1}/{len(items)}: sleeping {hydrate_delay}s to respect rate limits")
                         time.sleep(hydrate_delay)
 
                     # Fetch full bill data with hydration (bill_type from API should already be lowercase)
@@ -817,7 +966,6 @@ class CongressAPIClient:
                     origin_chamber_code=it.get("originChamberCode"),
                     latest_action=latest_action_text,
                     latest_action_date=latest_action_date,
-                    sponsor=None,  # Not in list response
                     sponsors=[],   # Not in list response
                     policy_area=None,  # Not in list response
                     laws=[],  # Not in list response
@@ -855,7 +1003,7 @@ class CongressAPIClient:
         bill_number: int,
         *,
         limit: Optional[int] = None  # Maximum number of cosponsors to return (None = all available)
-    ) -> List[Cosponsor]:
+    ) -> List[Member]:
         """Fetch the list of cosponsors for a specific bill."""
         # Ensure bill_type is lowercase for API endpoint
         bill_type_lower = bill_type.lower()
@@ -866,117 +1014,247 @@ class CongressAPIClient:
         if limit is not None and limit > 0:
             items = items[:limit]
 
-        cosponsors: List[Cosponsor] = []
+        cosponsors: List[Member] = []
 
         for item in items:
-            cosponsors.append(Cosponsor(
-                bioguide_id=item.get("bioguideId"),
-                first_name=item.get("firstName"),
-                middle_name=item.get("middleName"),  # Added middle name support
-                last_name=item.get("lastName"),
-                full_name=item.get("fullName"),  # Fixed: use 'fullName' not 'name'
-                party=item.get("party"),
-                state=item.get("state"),
-                district=item.get("district"),
+            cosponsors.append(self._dict_to_member(
+                item,
                 sponsorship_date=item.get("sponsorshipDate"),
                 sponsorship_withdrawn_date=item.get("sponsorshipWithdrawnDate"),
-                is_original_cosponsor=item.get("isOriginalCosponsor"),
-                api_url=self._url_with_key(item.get("url")),
-                raw=item
+                is_original_cosponsor=item.get("isOriginalCosponsor")
             ))
 
         return cosponsors
 
-    def get_bill(self, congress: int, bill_type: str, bill_number: int, *, hydrate: bool = False) -> Bill:
+    def get_bill_amendments(
+        self,
+        congress: int,
+        bill_type: str,
+        bill_number: int,
+        *,
+        hydrate: bool = False,  # If True, fetch full amendment details including sponsors/cosponsors
+        limit: Optional[int] = None  # Maximum number of amendments to return (None = all available)
+    ) -> List[Amendment]:
+        """Fetch the list of amendments for a specific bill."""
+        # Ensure bill_type is lowercase for API endpoint
+        bill_type_lower = bill_type.lower()
+        data = self._get(f"bill/{congress}/{bill_type_lower}/{bill_number}/amendments")
+        items = self._extract_items(data.get("amendments"))
+
+        # Apply limit if specified
+        if limit is not None and limit > 0:
+            items = items[:limit]
+
+        amendments: List[Amendment] = []
+
+        for item in items:
+            if hydrate:
+                # Fetch full amendment details
+                amendment_congress = item.get("congress")
+                amendment_type = item.get("type")
+                amendment_number = item.get("number")
+                if amendment_congress and amendment_type and amendment_number:
+                    # Get full amendment details with sponsors/cosponsors
+                    full_amendment = self.get_amendment(amendment_congress, amendment_type, amendment_number, hydrate=True)
+                    amendments.append(full_amendment)
+                    continue
+
+            # For non-hydrated requests, create Amendment from list summary data (limited fields)
+            latest_action_info = item.get("latestAction", {})
+            latest_action_text = latest_action_info.get("text")
+            latest_action_date = latest_action_info.get("actionDate")
+
+            amendments.append(Amendment(
+                congress=item.get("congress"),
+                amendment_type=item.get("type"),
+                amendment_number=item.get("number"),
+                description=item.get("description"),
+                purpose=item.get("purpose"),
+                latest_action=latest_action_text,
+                latest_action_date=latest_action_date,
+                sponsors=[],  # Not available in amendment list, need individual amendment call
+                cosponsors=[],  # Not available in amendment list, need individual amendment call
+                cosponsors_count=None,  # Not available in amendment list
+                cosponsors_url=None,  # Not available in amendment list
+                actions_url=None,  # Not available in amendment list
+                actions_count=None,  # Not available in amendment list
+                amendments_url=None,  # Not available in amendment list
+                amendments_count=None,  # Not available in amendment list
+                text_url=None,  # Not available in amendment list
+                update_date=item.get("updateDate"),
+                api_url=self._url_with_key(item.get("url")),
+                raw=item
+            ))
+
+        return amendments
+
+    def get_amendment(self, congress: int, amendment_type: str, amendment_number: int, *, hydrate: bool = False) -> Amendment:
         """
-        Fetch detailed information for a specific bill.
+        Fetch detailed information for a specific amendment.
 
         Args:
             congress: Congress number (e.g., 117)
-            bill_type: Bill type ("hr", "s", "hjres", "sjres", etc.)
-            bill_number: Bill number
-            hydrate: If True, fetch additional related data like full cosponsors list
+            amendment_type: Amendment type ("hamdt", "samdt", etc.)
+            amendment_number: Amendment number
+            hydrate: If True, fetch additional data like full cosponsors list
         """
-        # Ensure bill_type is lowercase for API endpoint
-        bill_type_lower = bill_type.lower()
-        b = self._get(f"bill/{congress}/{bill_type_lower}/{bill_number}").get("bill", {})
-        texts = [
-            BillTextVersion(type=tv.get("type"), url=tv.get("url"), date=tv.get("date"), raw=tv)
-            for tv in self._extract_items(b.get("textVersions"))
-        ]
-
-        # Extract cosponsorship info from the bill data
-        cosponsors_info = b.get("cosponsors", {})
-        cosponsors_count = cosponsors_info.get("count")
-        cosponsors_count_including_withdrawn = cosponsors_info.get("countIncludingWithdrawnCosponsors")
-        cosponsors_url = self._url_with_key(cosponsors_info.get("url"))
+        # Ensure amendment_type is lowercase for API endpoint
+        amendment_type_lower = amendment_type.lower()
+        a = self._get(f"amendment/{congress}/{amendment_type_lower}/{amendment_number}").get("amendment", {})
 
         # Extract latest action info
-        latest_action_info = b.get("latestAction", {})
+        latest_action_info = a.get("latestAction", {})
         latest_action_text = latest_action_info.get("text")
         latest_action_date = latest_action_info.get("actionDate")
 
-        # Extract policy area
-        policy_area = b.get("policyArea")
-
         # Extract related content URLs and counts
-        actions_info = b.get("actions", {})
-        committees_info = b.get("committees", {})
-        related_bills_info = b.get("relatedBills", {})
-        subjects_info = b.get("subjects", {})
-        summaries_info = b.get("summaries", {})
-        titles_info = b.get("titles", {})
+        actions_info = a.get("actions", {})
+        amendments_info = a.get("amendments", {})  # Amendments to this amendment
+        cosponsors_info = a.get("cosponsors", {})
+        text_versions_info = a.get("textVersions", {})
 
-        # Handle sponsors (can be in 'sponsor' or 'sponsors' field)
-        sponsor = b.get("sponsor")
-        sponsors = self._extract_items(b.get("sponsors"))
+        # Handle sponsors (consolidate 'sponsor' and 'sponsors' fields into sponsors list)
+        sponsors = []
+
+        # Add from 'sponsors' field (list)
+        sponsors_list = self._extract_items(a.get("sponsors"))
+        if sponsors_list:
+            sponsors.extend([self._dict_to_member(s) for s in sponsors_list])
+
+        # Add from 'sponsor' field (single object) if not already in sponsors list
+        sponsor_obj = a.get("sponsor")
+        if sponsor_obj and sponsor_obj not in sponsors_list:
+            sponsors.append(self._dict_to_member(sponsor_obj))
 
         # Optionally fetch full cosponsors list
         cosponsors = []
-        if hydrate and cosponsors_url:
-            cosponsors = self.get_bill_cosponsors(congress, bill_type_lower, bill_number)
+        cosponsors_url = self._url_with_key(cosponsors_info.get("url"))
+        if hydrate:
+            # Always try to fetch cosponsors when hydrating, even if URL not in response
+            try:
+                cosponsors = self.get_amendment_cosponsors(congress, amendment_type_lower, amendment_number)
+            except Exception as e:
+                # If cosponsor fetching fails, log but continue (amendment might have no cosponsors)
+                self.logger.debug(f"Could not fetch cosponsors for amendment {congress}/{amendment_type_lower}/{amendment_number}: {e}")
+                cosponsors = []
 
-        return Bill(
-            congress=b.get("congress"),
-            bill_type=b.get("type") or b.get("billType"),
-            bill_number=b.get("number"),
-            title=b.get("title"),
-            introduced_date=b.get("introducedDate"),
-            origin_chamber=b.get("originChamber"),
-            origin_chamber_code=b.get("originChamberCode"),
+        return Amendment(
+            congress=a.get("congress"),
+            amendment_type=a.get("type"),
+            amendment_number=a.get("number"),
+            description=a.get("description"),
+            purpose=a.get("purpose"),
             latest_action=latest_action_text,
             latest_action_date=latest_action_date,
-            sponsor=sponsor,
+            chamber=a.get("chamber"),
+            proposed_date=a.get("proposedDate"),
+            submitted_date=a.get("submittedDate"),
+            amended_bill=a.get("amendedBill"),
             sponsors=sponsors,
-            policy_area=policy_area,
-            laws=self._extract_items(b.get("laws")),
-            constitutional_authority_statement=b.get("constitutionalAuthorityStatementText"),
-            cbo_cost_estimates=self._extract_items(b.get("cboCostEstimates")),
-            committee_reports=self._extract_items(b.get("committeeReports")),
-            cosponsors_count=cosponsors_count,
-            cosponsors_count_including_withdrawn=cosponsors_count_including_withdrawn,
             cosponsors=cosponsors,
+            cosponsors_count=cosponsors_info.get("count"),
+            cosponsors_count_including_withdrawn=cosponsors_info.get("countIncludingWithdrawnCosponsors"),
             cosponsors_url=cosponsors_url,
             actions_url=self._url_with_key(actions_info.get("url")),
             actions_count=actions_info.get("count"),
-            committees_url=self._url_with_key(committees_info.get("url")),
-            committees_count=committees_info.get("count"),
-            related_bills_url=self._url_with_key(related_bills_info.get("url")),
-            related_bills_count=related_bills_info.get("count"),
-            subjects_url=self._url_with_key(subjects_info.get("url")),
-            subjects_count=subjects_info.get("count"),
-            summaries_url=self._url_with_key(summaries_info.get("url")),
-            summaries_count=summaries_info.get("count"),
-            titles_url=self._url_with_key(titles_info.get("url")),
-            titles_count=titles_info.get("count"),
-            legislation_url=b.get("legislationUrl"),
-            urls=[u for u in [b.get("url")] if u],
-            texts=texts,
-            update_date=b.get("updateDate"),
-            update_date_including_text=b.get("updateDateIncludingText"),
-            api_url=self._url_with_key(b.get("url")) or f"{self.base_url}/bill/{congress}/{bill_type_lower}/{bill_number}?api_key={self.api_key}",
-            raw=b,
+            amendments_url=self._url_with_key(amendments_info.get("url")),
+            amendments_count=amendments_info.get("count"),
+            text_url=self._url_with_key(text_versions_info.get("url")),
+            text_count=text_versions_info.get("count"),
+            update_date=a.get("updateDate"),
+            api_url=self._url_with_key(a.get("url")) or f"{self.base_url}/amendment/{congress}/{amendment_type_lower}/{amendment_number}?api_key={self.api_key}",
+            raw=a,
         )
+
+    def get_amendment_cosponsors(
+        self,
+        congress: int,
+        amendment_type: str,
+        amendment_number: int,
+        *,
+        limit: Optional[int] = None  # Maximum number of cosponsors to return (None = all available)
+    ) -> List[Member]:
+        """Fetch the list of cosponsors for a specific amendment."""
+        # Ensure amendment_type is lowercase for API endpoint
+        amendment_type_lower = amendment_type.lower()
+        data = self._get(f"amendment/{congress}/{amendment_type_lower}/{amendment_number}/cosponsors")
+        items = self._extract_items(data.get("cosponsors"))
+
+        # Apply limit if specified
+        if limit is not None and limit > 0:
+            items = items[:limit]
+
+        cosponsors: List[Member] = []
+
+        for item in items:
+            cosponsors.append(self._dict_to_member(
+                item,
+                sponsorship_date=item.get("sponsorshipDate"),
+                sponsorship_withdrawn_date=item.get("sponsorshipWithdrawnDate"),
+                is_original_cosponsor=item.get("isOriginalCosponsor")
+            ))
+
+        return cosponsors
+
+    def get_amendments(
+        self,
+        congress: Optional[int] = None,
+        amendment_type: Optional[str] = None,  # "hamdt", "samdt", etc.
+        *,
+        limit: Optional[int] = None  # Maximum number of amendments to return (None = all available)
+    ) -> List[Amendment]:
+        """Fetch a list of amendments with optional filtering."""
+        if congress and amendment_type:
+            # Ensure amendment_type is lowercase for API endpoint
+            amendment_type_lower = amendment_type.lower()
+            path = f"amendment/{congress}/{amendment_type_lower}"
+            params = {}
+        elif congress:
+            path = f"amendment/{congress}"
+            params = {}
+        else:
+            path = "amendment"
+            params = {}
+
+        items = list(self._paged(path, data_key="amendments", params=params))
+
+        # Apply limit if specified
+        if limit is not None and limit > 0:
+            items = items[:limit]
+
+        out: List[Amendment] = []
+        for it in items:
+            # Extract latest action info (available in list response)
+            latest_action_info = it.get("latestAction", {})
+            latest_action_text = latest_action_info.get("text") if latest_action_info else None
+            latest_action_date = latest_action_info.get("actionDate") if latest_action_info else None
+
+            # Most detailed fields require individual amendment API calls
+            out.append(
+                Amendment(
+                    congress=it.get("congress"),
+                    amendment_type=it.get("type"),
+                    amendment_number=it.get("number"),
+                    description=it.get("description"),
+                    purpose=it.get("purpose"),
+                    latest_action=latest_action_text,
+                    latest_action_date=latest_action_date,
+                    sponsors=[],  # Not in list response
+                    cosponsors=[],  # Not in list response
+                    cosponsors_count=None,  # Not in list response
+                    cosponsors_url=None,  # Not in list response
+                    actions_url=None,  # Not in list response
+                    actions_count=None,  # Not in list response
+                    amendments_url=None,  # Not in list response
+                    amendments_count=None,  # Not in list response
+                    text_url=None,  # Not in list response
+                    update_date=it.get("updateDate"),
+                    api_url=self._url_with_key(it.get("url")),
+                    raw=it,
+                )
+            )
+        return out
+
 
 #%%
 

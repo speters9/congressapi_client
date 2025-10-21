@@ -82,13 +82,21 @@ class MemberRole:
 class Member:
     bioguide_id: str
     first_name: Optional[str] = None
+    middle_name: Optional[str] = None  # Middle name/initial when available
     last_name: Optional[str] = None
     full_name: Optional[str] = None
     party: Optional[str] = None
     state: Optional[str] = None
+    district: Optional[str] = None  # Congressional district (for House members)
     chamber: Optional[str] = None
     is_current: Optional[bool] = None
     roles: List[MemberRole] = field(default_factory=list)
+
+    # Sponsorship metadata (when Member represents a sponsor/cosponsor)
+    sponsorship_date: Optional[str] = None  # Date they became a sponsor/cosponsor
+    sponsorship_withdrawn_date: Optional[str] = None  # Date they withdrew (if applicable)
+    is_original_cosponsor: Optional[bool] = None  # True if original cosponsor, False if added later
+
     api_url: Optional[str] = None
     raw: Dict[str, Any] = field(default_factory=dict)
 
@@ -103,18 +111,40 @@ class BillTextVersion:
 
 
 @dataclass
-class Cosponsor:
-    bioguide_id: Optional[str] = None
-    first_name: Optional[str] = None
-    middle_name: Optional[str] = None  # Middle name/initial when available
-    last_name: Optional[str] = None
-    full_name: Optional[str] = None
-    party: Optional[str] = None
-    state: Optional[str] = None
-    district: Optional[str] = None
-    sponsorship_date: Optional[str] = None  # Date they became a cosponsor
-    sponsorship_withdrawn_date: Optional[str] = None  # Date they withdrew (if applicable)
-    is_original_cosponsor: Optional[bool] = None
+class Amendment:
+    congress: int
+    amendment_type: str  # "HAMDT", "SAMDT", etc.
+    amendment_number: int
+    description: Optional[str] = None
+    purpose: Optional[str] = None
+    latest_action: Optional[str] = None
+    latest_action_date: Optional[str] = None
+
+    # Amendment metadata
+    chamber: Optional[str] = None  # Chamber where amendment was proposed
+    proposed_date: Optional[str] = None  # Date amendment was proposed
+    submitted_date: Optional[str] = None  # Date amendment was submitted
+
+    # Information about the bill being amended
+    amended_bill: Optional[Dict[str, Any]] = None  # Bill that this amendment modifies
+
+    # Sponsorship information for amendments
+    sponsors: List[Member] = field(default_factory=list)
+    cosponsors: List[Member] = field(default_factory=list)
+    cosponsors_count: Optional[int] = None
+    cosponsors_count_including_withdrawn: Optional[int] = None
+    cosponsors_url: Optional[str] = None
+
+    # Related content URLs
+    actions_url: Optional[str] = None
+    actions_count: Optional[int] = None
+    amendments_url: Optional[str] = None  # Amendments to this amendment
+    amendments_count: Optional[int] = None
+    text_url: Optional[str] = None  # Amendment text
+    text_count: Optional[int] = None  # Number of text versions
+
+    # Metadata
+    update_date: Optional[str] = None
     api_url: Optional[str] = None
     raw: Dict[str, Any] = field(default_factory=dict)
 
@@ -132,8 +162,7 @@ class Bill:
     latest_action_date: Optional[str] = None  # Date of latest action
 
     # Primary sponsor information
-    sponsor: Optional[Dict[str, Any]] = None  # Full sponsor object from API
-    sponsors: List[Dict[str, Any]] = field(default_factory=list)  # List format (sometimes used)
+    sponsors: List[Member] = field(default_factory=list)  # Consolidated sponsor list
 
     # Policy and subject information
     policy_area: Optional[Dict[str, str]] = None  # {"name": "Policy Area Name"}
@@ -149,12 +178,14 @@ class Bill:
     # Cosponsorship information
     cosponsors_count: Optional[int] = None
     cosponsors_count_including_withdrawn: Optional[int] = None
-    cosponsors: List[Cosponsor] = field(default_factory=list)  # Full list if fetched
+    cosponsors: List[Member] = field(default_factory=list)  # Full list if fetched
     cosponsors_url: Optional[str] = None  # API URL to fetch full cosponsors list
 
     # Related content URLs (for optional hydration)
     actions_url: Optional[str] = None  # URL to fetch bill actions
     actions_count: Optional[int] = None
+    amendments_url: Optional[str] = None  # URL to fetch bill amendments
+    amendments_count: Optional[int] = None
     committees_url: Optional[str] = None  # URL to fetch associated committees
     committees_count: Optional[int] = None
     related_bills_url: Optional[str] = None  # URL to fetch related bills
@@ -165,6 +196,9 @@ class Bill:
     summaries_count: Optional[int] = None
     titles_url: Optional[str] = None  # URL to fetch all bill titles
     titles_count: Optional[int] = None
+
+    # Amendment information
+    amendments: List[Amendment] = field(default_factory=list)  # Full list if fetched via hydration
 
     # External URLs
     legislation_url: Optional[str] = None  # Congress.gov public URL
