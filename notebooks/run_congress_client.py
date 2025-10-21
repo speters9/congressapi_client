@@ -21,7 +21,11 @@ client = CongressAPIClient(
     backoff_cap=30.0    # max backoff sleep
 )
 
+#%%
 
+bills = client.get_bills(117, 'hr', hydrate=True, limit=5)
+
+#%%
 TARGETS = {"hsas00", "ssas00", "ssfr00", "hsfa00"}
 
 all_hearings = client.get_hearings(congress=118, chamber="house")

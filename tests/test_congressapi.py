@@ -229,3 +229,124 @@ def test_committee_meeting_detail_rich(client, requests_mock):
     cm = client.get_committee_meeting(118, "house", 115281)
     assert cm.witnesses and cm.documents and cm.videos
     assert cm.related_bills and cm.related_nominations and cm.related_treaties
+
+def test_bill_cosponsors(client, requests_mock):
+    # Test getting bill detail with cosponsorship summary
+    bill_url = f"{API_BASE}/bill/117/hr/3076"
+    requests_mock.get(bill_url, json={
+        "bill": {
+            "congress": 117,
+            "type": "HR",
+            "number": "3076",
+            "title": "Postal Service Reform Act of 2022",
+            "introducedDate": "2021-05-11",
+            "originChamber": "House",
+            "originChamberCode": "H",
+            "latestAction": {
+                "actionDate": "2022-04-06",
+                "text": "Became Public Law No: 117-108."
+            },
+            "policyArea": {
+                "name": "Government Operations and Politics"
+            },
+            "sponsor": {"bioguideId": "M000087", "firstName": "CAROLYN", "lastName": "MALONEY"},
+            "sponsors": [{"bioguideId": "M000087", "firstName": "CAROLYN", "lastName": "MALONEY"}],
+            "laws": [{"number": "117-108", "type": "Public Law"}],
+            "cosponsors": {
+                "count": 102,
+                "countIncludingWithdrawnCosponsors": 102,
+                "url": f"{API_BASE}/bill/117/hr/3076/cosponsors"
+            },
+            "actions": {
+                "count": 20,
+                "url": f"{API_BASE}/bill/117/hr/3076/actions"
+            },
+            "relatedBills": {
+                "count": 4,
+                "url": f"{API_BASE}/bill/117/hr/3076/relatedbills"
+            },
+            "subjects": {
+                "count": 17,
+                "url": f"{API_BASE}/bill/117/hr/3076/subjects"
+            },
+            "legislationUrl": "https://congress.gov/bill/117th-congress/house-bill/3076",
+            "updateDate": "2022-09-29T03:27:05Z",
+            "textVersions": {"item": []},
+            "url": bill_url
+        }
+    })
+
+    # Test getting full cosponsors list
+    cosponsors_url = f"{API_BASE}/bill/117/hr/3076/cosponsors"
+    requests_mock.get(cosponsors_url, json={
+            "cosponsors": {"item": [
+                {
+                    "bioguideId": "S000185",
+                    "firstName": "Robert",
+                    "lastName": "Scott",
+                    "fullName": "Rep. Scott, Robert C. [D-VA-3]",
+                    "party": "D",
+                    "state": "VA",
+                    "district": "3",
+                    "sponsorshipDate": "2021-05-11",
+                    "isOriginalCosponsor": True,
+                    "url": f"{API_BASE}/member/S000185"
+                },
+                {
+                    "bioguideId": "J000032",
+                    "firstName": "Sheila",
+                    "lastName": "Jackson Lee",
+                    "fullName": "Rep. Jackson Lee, Sheila [D-TX-18]",
+                    "party": "D",
+                    "state": "TX",
+                    "district": "18",
+                    "sponsorshipDate": "2021-05-15",
+                    "sponsorshipWithdrawnDate": "2021-06-01",
+                    "isOriginalCosponsor": False,
+                    "url": f"{API_BASE}/member/J000032"
+                }
+            ]}
+        })    # Test bill detail without cosponsors
+    bill = client.get_bill(117, "hr", 3076)
+    assert bill.cosponsors_count == 102
+    assert bill.cosponsors_count_including_withdrawn == 102
+    assert bill.cosponsors_url is not None
+    assert len(bill.cosponsors) == 0  # Not fetched by default
+
+    # Test new fields
+    assert bill.introduced_date == "2021-05-11"
+    assert bill.origin_chamber == "House"
+    assert bill.origin_chamber_code == "H"
+    assert bill.latest_action == "Became Public Law No: 117-108."
+    assert bill.latest_action_date == "2022-04-06"
+    assert bill.policy_area["name"] == "Government Operations and Politics"
+    assert len(bill.laws) == 1
+    assert bill.laws[0]["number"] == "117-108"
+    assert bill.actions_count == 20
+    assert bill.related_bills_count == 4
+    assert bill.subjects_count == 17
+    assert bill.legislation_url == "https://congress.gov/bill/117th-congress/house-bill/3076"
+    assert bill.update_date == "2022-09-29T03:27:05Z"
+
+    # Test bill detail with cosponsors
+    bill_with_cosponsors = client.get_bill(117, "hr", 3076, hydrate=True)
+    assert len(bill_with_cosponsors.cosponsors) == 2
+
+    # Check first cosponsor
+    cosponsor1 = bill_with_cosponsors.cosponsors[0]
+    assert cosponsor1.bioguide_id == "S000185"
+    assert cosponsor1.full_name == "Rep. Scott, Robert C. [D-VA-3]"
+    assert cosponsor1.party == "D"
+    assert cosponsor1.is_original_cosponsor is True
+    assert cosponsor1.sponsorship_withdrawn_date is None
+
+    # Check second cosponsor (withdrawn)
+    cosponsor2 = bill_with_cosponsors.cosponsors[1]
+    assert cosponsor2.bioguide_id == "J000032"
+    assert cosponsor2.sponsorship_withdrawn_date == "2021-06-01"
+    assert cosponsor2.is_original_cosponsor is False
+
+    # Test getting cosponsors directly
+    cosponsors = client.get_bill_cosponsors(117, "hr", 3076)
+    assert len(cosponsors) == 2
+    assert all(c.bioguide_id for c in cosponsors)
