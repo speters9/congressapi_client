@@ -320,7 +320,7 @@ def test_bill_cosponsors(client, requests_mock):
     assert bill.origin_chamber_code == "H"
     assert bill.latest_action == "Became Public Law No: 117-108."
     assert bill.latest_action_date == "2022-04-06"
-    assert bill.policy_area["name"] == "Government Operations and Politics"
+    assert bill.policy_area == "Government Operations and Politics"
     assert len(bill.laws) == 1
     assert bill.laws[0]["number"] == "117-108"
     assert bill.actions_count == 20

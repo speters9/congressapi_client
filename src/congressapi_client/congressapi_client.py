@@ -830,7 +830,8 @@ class CongressAPIClient:
         latest_action_date = latest_action_info.get("actionDate")
 
         # Extract policy area
-        policy_area = b.get("policyArea")
+        policy_area_dict = b.get("policyArea")
+        policy_area = policy_area_dict.get("name") if policy_area_dict else None
 
         # Extract related content URLs and counts
         actions_info = b.get("actions", {})

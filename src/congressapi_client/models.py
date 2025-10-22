@@ -165,7 +165,7 @@ class Bill:
     sponsors: List[Member] = field(default_factory=list)  # Consolidated sponsor list
 
     # Policy and subject information
-    policy_area: Optional[Dict[str, str]] = None  # {"name": "Policy Area Name"}
+    policy_area: Optional[str] = None  # dict.get("name") -> "Policy Area Name"
 
     # Legislative status
     laws: List[Dict[str, Any]] = field(default_factory=list)  # If bill became law
