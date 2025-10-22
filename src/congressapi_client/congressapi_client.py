@@ -46,6 +46,7 @@ class CongressAPIClient:
         log_level: int = logging.INFO,
         req_per_hour: int = 5000,
         rph_margin = 0.01, # reduce max requests per hour by 1% (ie 50) given requests tend to be bundled
+        sleep_minutes: int = 15,  # sleep time when rate limit exhausted
     ):
         self.api_key = api_key or os.getenv("CONGRESS_API_KEY") or os.getenv("CONGRESS_DOT_GOV_API_KEY")
         if not self.api_key:
@@ -76,6 +77,7 @@ class CongressAPIClient:
         effective_limit = max(1, int(self.req_per_hour * (1.0 - self.rph_margin)))
         self.hourly_capacity = effective_limit                    # integer bucket size
         self.hourly_refill_rate = float(effective_limit) / 3600.0 # tokens per second
+        self.sleep_minutes = int(sleep_minutes)
 
         # monotonic clock for continuous upward counting
         self._last_call = time.monotonic()
@@ -106,13 +108,13 @@ class CongressAPIClient:
         elapsed = now_m - prev_refill
         tokens = min(self.hourly_capacity, self._tokens + elapsed * self.hourly_refill_rate)
 
-        # If short a token, sleep just enough, then recompute refill once
+        # If short a token, sleep for a substantial period (15-20 min) to let many tokens accumulate
         if tokens < 1.0:
-            need = 1.0 - tokens
-            sleep_s = need / self.hourly_refill_rate
-            if sleep_s > 0:
-                self.logger.info(f"Hourly budget nearly exhausted; sleeping ~{sleep_s/60:.2f} minutes.")
-                time.sleep(sleep_s)
+            # Sleep for 15-20 minutes to let a decent number of tokens accumulate
+            sleep_s = self.sleep_minutes * 60
+            expected_tokens = sleep_s * self.hourly_refill_rate
+            self.logger.info(f"Hourly budget exhausted; sleeping {self.sleep_minutes} minutes to accumulate ~{expected_tokens:.0f} requests.")
+            time.sleep(sleep_s)
             now_m = time.monotonic()
             elapsed = now_m - prev_refill
             tokens = min(self.hourly_capacity, self._tokens + elapsed * self.hourly_refill_rate)
