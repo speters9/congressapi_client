@@ -202,7 +202,7 @@ class CongressAPIClient:
                 continue
         if isinstance(last_exc, requests.HTTPError):
             raise last_exc
-        raise requests.RetryError(f"Failed after {self.max_tries} attempts: {url}")  # type: ignore
+        raise requests.RequestException(f"Failed after {self.max_tries} attempts: {url}")
 
     # ------------- core request helpers -------------
     def _get(self, path: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -362,6 +362,8 @@ class CongressAPIClient:
         state: Optional[str] = None,
         district: Optional[str] = None,
         current: Optional[bool] = None,
+        # error handling
+        continue_on_error: bool = True,  # If True, log errors and continue; if False, raise on first error
     ) -> Iterator[Union[Dict[str, Any], Any]]:
         """
         Stream entities with optional detail hydration and predicate filtering.
@@ -480,9 +482,17 @@ class CongressAPIClient:
                 continue
 
             if hydrate:
-                full = _hydrate(it)
-                if full is None:
-                    continue
+                try:
+                    full = _hydrate(it)
+                    if full is None:
+                        continue
+                except (requests.RequestException, requests.HTTPError) as e:
+                    if continue_on_error:
+                        # Log the error but continue processing other items
+                        self.logger.error(f"Failed to hydrate {entity} {it}: {e}")
+                        continue
+                    else:
+                        raise  # Re-raise the exception to stop processing
                 # If filtering with hydration, convert to a dict-like view for the predicate
                 if where:
                     # Use the already-available .raw when present, else build a minimal dict
@@ -923,7 +933,8 @@ class CongressAPIClient:
         hydrate: bool = False,  # If True, fetch full cosponsors for each bill (much slower)
         hydrate_delay: float = 0.5,  # Seconds to sleep between hydrated requests to avoid rate limits
         limit: Optional[int] = None,  # Maximum number of bills to return (None = all available)
-        verbose: bool = False
+        verbose: bool = False,
+        continue_on_error: bool = True  # If True, log errors and continue; if False, raise on first error
     ) -> List[Bill]:
         """
         Fetch a list of bills with optional filtering.
@@ -938,6 +949,7 @@ class CongressAPIClient:
             hydrate_delay: Seconds to sleep between hydrated requests (default 0.5s to avoid rate limits)
             limit: Maximum number of bills to return (None = all available)
             verbose: How much logging is done
+            continue_on_error: If True, log errors and continue processing; if False, raise on first error
 
         Returns:
             List of Bill objects. If hydrate=False, only basic fields are populated.
@@ -987,8 +999,15 @@ class CongressAPIClient:
                         time.sleep(hydrate_delay)
 
                     # Fetch full bill data with hydration (bill_type from API should already be lowercase)
-                    full_bill = self.get_bill(congress, bill_type, bill_number, hydrate=True)
-                    out.append(full_bill)
+                    try:
+                        full_bill = self.get_bill(congress, bill_type, bill_number, hydrate=True)
+                        out.append(full_bill)
+                    except (requests.RequestException, requests.HTTPError) as e:
+                        if continue_on_error:
+                            self.logger.error(f"Failed to fetch bill {congress}/{bill_type}/{bill_number}: {e}")
+                            continue  # Skip this bill and continue with the next one
+                        else:
+                            raise  # Re-raise the exception to stop processing
                     continue
 
             # For non-hydrated requests, create Bill from list summary data (limited fields)
