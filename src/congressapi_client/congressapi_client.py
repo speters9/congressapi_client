@@ -16,8 +16,8 @@ import requests
 from requests import RequestException
 
 from .models import (Amendment, Bill, BillTextVersion, Committee,
-                     CommitteeMeeting, Hearing, HearingFormat, Member,
-                     MemberRole, Subcommittee)
+                     CommitteeMeeting, Hearing, HearingFormat, LeadershipRole,
+                     Member, MemberTerm, PartyAffiliation, Subcommittee)
 from .utils import logger_setup
 
 #%%
@@ -757,30 +757,46 @@ class CongressAPIClient:
 
         out: List[Member] = []
         for it in items:
-            roles = [
-                MemberRole(
-                    congress=r.get("congress"),
-                    chamber=r.get("chamber"),
-                    title=r.get("title"),
-                    state=r.get("state"),
-                    district=r.get("district"),
-                    start=r.get("startYear"),
-                    end=r.get("endYear"),
-                    raw=r,
+            # Extract terms - the API returns 'terms' with nested items
+            terms_data = self._extract_items(it.get("terms"))
+            terms = [
+                MemberTerm(
+                    congress=t.get("congress"),
+                    chamber=t.get("chamber"),
+                    member_type=t.get("memberType"),
+                    start_year=t.get("startYear"),
+                    end_year=t.get("endYear"),
+                    state_code=t.get("stateCode"),
+                    state_name=t.get("stateName"),
+                    district=t.get("district"),
                 )
-                for r in self._extract_items(it.get("roles"))
+                for t in terms_data
             ]
+
+            # Extract party history
+            party_history_data = self._extract_items(it.get("partyHistory"))
+            party_history = [
+                PartyAffiliation(
+                    party_name=p.get("partyName"),
+                    party_abbreviation=p.get("partyAbbreviation"),
+                    start_year=p.get("startYear"),
+                    end_year=p.get("endYear"),
+                )
+                for p in party_history_data
+            ]
+
             out.append(
                 Member(
                     bioguide_id=it.get("bioguideId"),
                     first_name=it.get("firstName"),
                     last_name=it.get("lastName"),
-                    full_name=it.get("name"),
-                    party=it.get("party"),
+                    full_name=it.get("name"),  # API returns 'name' for full name in list
+                    party=it.get("partyName"),  # API returns 'partyName' not 'party'
                     state=it.get("state"),
-                    chamber=it.get("chamber"),
+                    district=it.get("district"),
                     is_current=it.get("isCurrent"),
-                    roles=roles,
+                    terms=terms,
+                    party_history=party_history,
                     api_url=self._url_with_key(it.get("url")),
                     raw=it,
                 )
@@ -789,24 +805,91 @@ class CongressAPIClient:
 
     def get_member(self, bioguide_id: str) -> Member:
         m = self._get(f"member/{bioguide_id}").get("member", {})
-        roles = [
-            MemberRole(
-                congress=r.get("congress"), chamber=r.get("chamber"),
-                title=r.get("title"), state=r.get("state"), district=r.get("district"),
-                start=r.get("startYear"), end=r.get("endYear"), raw=r
+
+        # Extract terms of service
+        terms_data = self._extract_items(m.get("terms"))
+        terms = [
+            MemberTerm(
+                congress=t.get("congress"),
+                chamber=t.get("chamber"),
+                member_type=t.get("memberType"),
+                start_year=t.get("startYear"),
+                end_year=t.get("endYear"),
+                state_code=t.get("stateCode"),
+                state_name=t.get("stateName"),
+                district=t.get("district"),
             )
-            for r in self._extract_items(m.get("roles"))
+            for t in terms_data
         ]
+
+        # Extract party history
+        party_history_data = self._extract_items(m.get("partyHistory"))
+        party_history = [
+            PartyAffiliation(
+                party_name=p.get("partyName"),
+                party_abbreviation=p.get("partyAbbreviation"),
+                start_year=p.get("startYear"),
+                end_year=p.get("endYear"),
+            )
+            for p in party_history_data
+        ]
+
+        # Extract leadership roles if present
+        leadership_data = self._extract_items(m.get("leadership"))
+        leadership_roles = [
+            LeadershipRole(
+                congress=lr.get("congress"),
+                type=lr.get("type"),
+                current=lr.get("current"),
+            )
+            for lr in leadership_data
+        ]
+
+        # Extract sponsored/cosponsored legislation info
+        sponsored = m.get("sponsoredLegislation", {})
+        cosponsored = m.get("cosponsoredLegislation", {})
+
+        # Extract address information
+        address_info = m.get("addressInformation", {})
+
+        # Extract depiction information
+        depiction = m.get("depiction", {})
+
+        # Determine current party from party history (most recent entry)
+        current_party = None
+        if party_history:
+            # Find the entry with no end year (current) or the most recent
+            current_entries = [p for p in party_history if p.end_year is None]
+            if current_entries:
+                current_party = current_entries[0].party_name
+            elif party_history:
+                # Use the most recent if no current entry
+                current_party = party_history[-1].party_name
+
         return Member(
             bioguide_id=m.get("bioguideId"),
             first_name=m.get("firstName"),
+            middle_name=m.get("middleName"),
             last_name=m.get("lastName"),
-            full_name=m.get("name"),
-            party=m.get("party"),
+            full_name=m.get("invertedOrderName") or m.get("directOrderName"),
+            honorific_name=m.get("honorificName"),
+            birth_year=m.get("birthYear"),
             state=m.get("state"),
-            chamber=m.get("chamber"),
-            is_current=m.get("isCurrent"),
-            roles=roles,
+            party=current_party,
+            is_current=m.get("currentMember"),
+            terms=terms,
+            party_history=party_history,
+            leadership_roles=leadership_roles,
+            sponsored_legislation_count=sponsored.get("count"),
+            sponsored_legislation_url=self._url_with_key(sponsored.get("url")),
+            cosponsored_legislation_count=cosponsored.get("count"),
+            cosponsored_legislation_url=self._url_with_key(cosponsored.get("url")),
+            official_website_url=m.get("officialWebsiteUrl"),
+            office_address=address_info.get("officeAddress"),
+            phone_number=address_info.get("phoneNumber"),
+            image_url=depiction.get("imageUrl"),
+            image_attribution=depiction.get("attribution"),
+            update_date=m.get("updateDate"),
             api_url=self._url_with_key(m.get("url")),
             raw=m,
         )

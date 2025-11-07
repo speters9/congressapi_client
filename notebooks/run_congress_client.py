@@ -1,5 +1,6 @@
 #%%
 import os
+from pprint import pprint
 
 from dotenv import load_dotenv
 from tqdm import tqdm
@@ -21,6 +22,13 @@ client = CongressAPIClient(
     backoff_cap=30.0,    # max backoff sleep,
     sleep_minutes=15,     # sleep time when rate limit exhausted
 )
+
+#%%
+
+members = client.get_members(congress=96)
+
+mbr = client.get_member(members[0].bioguide_id)
+pprint(mbr)
 
 #%%
 

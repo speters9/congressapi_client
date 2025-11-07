@@ -7,7 +7,7 @@ import requests
 import requests_mock
 
 from src.congressapi_client import CongressAPIClient
-from src.congressapi_client.models import Member
+from src.congressapi_client.models import Member, MemberTerm, PartyAffiliation
 
 API_BASE = "https://api.congress.gov/v3"
 

@@ -67,36 +67,80 @@ class Hearing:
 
 
 @dataclass
-class MemberRole:
+class MemberTerm:
+    """Represents a term of service in Congress."""
     congress: Optional[int] = None
-    chamber: Optional[str] = None
-    title: Optional[str] = None
-    state: Optional[str] = None
-    district: Optional[str] = None
-    start: Optional[str] = None
-    end: Optional[str] = None
-    raw: Dict[str, Any] = field(default_factory=dict)
+    chamber: Optional[str] = None  # "House of Representatives" or "Senate"
+    member_type: Optional[str] = None  # "Representative" or "Senator"
+    start_year: Optional[int] = None
+    end_year: Optional[int] = None
+    state_code: Optional[str] = None  # Two-letter state code
+    state_name: Optional[str] = None  # Full state name
+    district: Optional[int] = None  # District number (for House members)
+
+
+@dataclass
+class PartyAffiliation:
+    """Represents party affiliation history."""
+    party_name: Optional[str] = None  # Full party name
+    party_abbreviation: Optional[str] = None  # Party abbreviation (R, D, I, etc.)
+    start_year: Optional[int] = None
+    end_year: Optional[int] = None  # None if current
+
+
+@dataclass
+class LeadershipRole:
+    """Represents a leadership position held."""
+    congress: Optional[int] = None
+    type: Optional[str] = None  # Type of leadership role
+    current: Optional[bool] = None
 
 
 @dataclass
 class Member:
     bioguide_id: str
     first_name: Optional[str] = None
-    middle_name: Optional[str] = None  # Middle name/initial when available
+    middle_name: Optional[str] = None
     last_name: Optional[str] = None
-    full_name: Optional[str] = None
-    party: Optional[str] = None
+    full_name: Optional[str] = None  # invertedOrderName or directOrderName
+    honorific_name: Optional[str] = None  # Mr., Ms., Dr., etc.
+
+    # Current status
     state: Optional[str] = None
-    district: Optional[str] = None  # Congressional district (for House members)
-    chamber: Optional[str] = None
-    is_current: Optional[bool] = None
-    roles: List[MemberRole] = field(default_factory=list)
+    district: Optional[int] = None  # Current district (for House members)
+    party: Optional[str] = None  # Current party
+    is_current: Optional[bool] = None  # Currently serving member
+
+    # Biographical information
+    birth_year: Optional[str] = None
+
+    # Historical data
+    terms: List[MemberTerm] = field(default_factory=list)  # Terms of service
+    party_history: List[PartyAffiliation] = field(default_factory=list)  # Party affiliation history
+    leadership_roles: List[LeadershipRole] = field(default_factory=list)  # Leadership positions
+
+    # Legislative activity
+    sponsored_legislation_count: Optional[int] = None
+    sponsored_legislation_url: Optional[str] = None
+    cosponsored_legislation_count: Optional[int] = None
+    cosponsored_legislation_url: Optional[str] = None
+
+    # Contact information (optional, from detail view)
+    official_website_url: Optional[str] = None
+    office_address: Optional[str] = None
+    phone_number: Optional[str] = None
+
+    # Depiction
+    image_url: Optional[str] = None
+    image_attribution: Optional[str] = None
 
     # Sponsorship metadata (when Member represents a sponsor/cosponsor)
     sponsorship_date: Optional[str] = None  # Date they became a sponsor/cosponsor
     sponsorship_withdrawn_date: Optional[str] = None  # Date they withdrew (if applicable)
     is_original_cosponsor: Optional[bool] = None  # True if original cosponsor, False if added later
 
+    # Metadata
+    update_date: Optional[str] = None
     api_url: Optional[str] = None
     raw: Dict[str, Any] = field(default_factory=dict)
 
