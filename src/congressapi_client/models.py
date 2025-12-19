@@ -146,10 +146,71 @@ class Member:
 
 
 @dataclass
+class BillAction:
+    """Represents an action taken on a bill."""
+    action_code: Optional[str] = None  # Action code (e.g., "36000", "E30000")
+    action_date: Optional[str] = None  # Date of action (ISO format)
+    text: Optional[str] = None  # Description of the action
+    action_type: Optional[str] = None  # Type of action (e.g., "BecameLaw", "IntroReferral")
+    source_system: Optional[Dict[str, Any]] = None  # {"code": int, "name": str}
+    committees: List[Dict[str, Any]] = field(default_factory=list)  # Committees involved
+    recorded_votes: List[Dict[str, Any]] = field(default_factory=list)  # Recorded votes
+    calendar_number: Optional[str] = None  # Calendar number if applicable
+    action_time: Optional[str] = None  # Time of action if available
+    raw: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
 class BillTextVersion:
     type: Optional[str] = None
     url: Optional[str] = None
     date: Optional[str] = None
+    api_url: Optional[str] = None
+    raw: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class VoteMember:
+    """Represents how a member voted."""
+    bioguide_id: Optional[str] = None
+    name: Optional[str] = None  # Member's name
+    party: Optional[str] = None  # Party affiliation
+    state: Optional[str] = None  # State represented
+    vote_cast: Optional[str] = None  # "Yea", "Nay", "Present", "Not Voting"
+    raw: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class Vote:
+    """Represents a roll call vote in the House or Senate."""
+    congress: int
+    session: int
+    vote_number: int
+    chamber: Optional[str] = None  # "House" or "Senate"
+
+    # Vote metadata
+    vote_date: Optional[str] = None  # Date of vote
+    vote_type: Optional[str] = None  # "Recorded Vote", "Voice Vote", etc.
+    vote_result: Optional[str] = None  # "Passed", "Failed", etc.
+    vote_question: Optional[str] = None  # Question being voted on
+    vote_desc: Optional[str] = None  # Vote description
+    vote_title: Optional[str] = None  # Title of the vote
+
+    # Vote totals
+    yea_total: Optional[int] = None
+    nay_total: Optional[int] = None
+    present_total: Optional[int] = None
+    not_voting_total: Optional[int] = None
+
+    # Related legislation
+    bill: Optional[Dict[str, Any]] = None  # Bill information if vote is on a bill
+    amendment: Optional[Dict[str, Any]] = None  # Amendment information if vote is on an amendment
+
+    # Member votes (populated when fetching member votes)
+    members: List[VoteMember] = field(default_factory=list)
+
+    # Metadata
+    update_date: Optional[str] = None
     api_url: Optional[str] = None
     raw: Dict[str, Any] = field(default_factory=dict)
 

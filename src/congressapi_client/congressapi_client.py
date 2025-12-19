@@ -15,9 +15,10 @@ from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 import requests
 from requests import RequestException
 
-from .models import (Amendment, Bill, BillTextVersion, Committee,
+from .models import (Amendment, Bill, BillAction, BillTextVersion, Committee,
                      CommitteeMeeting, Hearing, HearingFormat, LeadershipRole,
-                     Member, MemberTerm, PartyAffiliation, Subcommittee)
+                     Member, MemberTerm, PartyAffiliation, Subcommittee, Vote,
+                     VoteMember)
 from .utils import logger_setup
 
 #%%
@@ -894,6 +895,79 @@ class CongressAPIClient:
             raw=m,
         )
 
+    # ------------- bill actions -------------
+    def get_bill_actions(
+        self,
+        congress: int,
+        bill_type: str,
+        bill_number: int,
+        *,
+        limit: Optional[int] = None  # Maximum number of actions to return (None = all available)
+    ) -> List[BillAction]:
+        """Fetch the list of actions for a specific bill."""
+        # Ensure bill_type is lowercase for API endpoint
+        bill_type_lower = bill_type.lower()
+        data = self._get(f"bill/{congress}/{bill_type_lower}/{bill_number}/actions")
+        items = self._extract_items(data.get("actions"))
+
+        # Apply limit if specified
+        if limit is not None and limit > 0:
+            items = items[:limit]
+
+        actions: List[BillAction] = []
+
+        for item in items:
+            actions.append(BillAction(
+                action_code=item.get("actionCode"),
+                action_date=item.get("actionDate"),
+                text=item.get("text"),
+                action_type=item.get("type"),
+                source_system=item.get("sourceSystem"),
+                committees=self._extract_items(item.get("committees")),
+                recorded_votes=self._extract_items(item.get("recordedVotes")),
+                calendar_number=item.get("calendarNumber"),
+                action_time=item.get("actionTime"),
+                raw=item
+            ))
+
+        return actions
+
+    def get_amendment_actions(
+        self,
+        congress: int,
+        amendment_type: str,
+        amendment_number: int,
+        *,
+        limit: Optional[int] = None  # Maximum number of actions to return (None = all available)
+    ) -> List[BillAction]:
+        """Fetch the list of actions for a specific amendment."""
+        # Ensure amendment_type is lowercase for API endpoint
+        amendment_type_lower = amendment_type.lower()
+        data = self._get(f"amendment/{congress}/{amendment_type_lower}/{amendment_number}/actions")
+        items = self._extract_items(data.get("actions"))
+
+        # Apply limit if specified
+        if limit is not None and limit > 0:
+            items = items[:limit]
+
+        actions: List[BillAction] = []
+
+        for item in items:
+            actions.append(BillAction(
+                action_code=item.get("actionCode"),
+                action_date=item.get("actionDate"),
+                text=item.get("text"),
+                action_type=item.get("type"),
+                source_system=item.get("sourceSystem"),
+                committees=self._extract_items(item.get("committees")),
+                recorded_votes=self._extract_items(item.get("recordedVotes")),
+                calendar_number=item.get("calendarNumber"),
+                action_time=item.get("actionTime"),
+                raw=item
+            ))
+
+        return actions
+
     # ------------- legislation (bills and amendments) -------------
     def get_bill(self, congress: int, bill_type: str, bill_number: int, *, hydrate: bool = False) -> Bill:
         """
@@ -1406,6 +1480,199 @@ class CongressAPIClient:
                 )
             )
         return out
+
+    # ------------- votes (house and senate) -------------
+    def get_votes(
+        self,
+        chamber: str,
+        congress: Optional[int] = None,
+        session: Optional[int] = None,
+        *,
+        limit: Optional[int] = None  # Maximum number of votes to return (None = all available)
+    ) -> List[Vote]:
+        """
+        Fetch roll call votes for House or Senate.
+
+        Args:
+            chamber: Chamber to fetch votes from ("house" or "senate")
+            congress: Congress number (e.g., 117, 118)
+            session: Session number (1 or 2)
+            limit: Maximum number of votes to return (None = all available)
+
+        Returns:
+            List of Vote objects
+
+        Warning:
+            The votes endpoints are currently in BETA and may be unreliable or return incomplete data.
+        """
+        chamber_lower = chamber.lower()
+        if chamber_lower not in ("house", "senate"):
+            raise ValueError(f"chamber must be 'house' or 'senate', got '{chamber}'")
+
+        self.logger.warning(
+            f"{chamber.title()} votes endpoint is in BETA - data may be incomplete or unavailable. "
+            "See https://api.congress.gov for current status."
+        )
+
+        if congress and session:
+            path = f"{chamber_lower}-vote/{congress}/{session}"
+        elif congress:
+            path = f"{chamber_lower}-vote/{congress}"
+        else:
+            path = f"{chamber_lower}-vote"
+
+        items = list(self._paged(path, data_key="votes"))
+
+        # Apply limit if specified
+        if limit is not None and limit > 0:
+            items = items[:limit]
+
+        out: List[Vote] = []
+        for it in items:
+            # Extract bill information if present
+            bill_info = it.get("bill")
+            amendment_info = it.get("amendment")
+
+            out.append(
+                Vote(
+                    congress=it.get("congress"),
+                    session=it.get("session"),
+                    vote_number=it.get("rollCallNumber") or it.get("voteNumber"),
+                    chamber=chamber.title(),
+                    vote_date=it.get("date"),
+                    vote_type=it.get("voteType"),
+                    vote_result=it.get("result"),
+                    vote_question=it.get("question"),
+                    vote_desc=it.get("description"),
+                    vote_title=it.get("title"),
+                    yea_total=it.get("yeas"),
+                    nay_total=it.get("nays"),
+                    present_total=it.get("present"),
+                    not_voting_total=it.get("notVoting"),
+                    bill=bill_info,
+                    amendment=amendment_info,
+                    update_date=it.get("updateDate"),
+                    api_url=self._url_with_key(it.get("url")),
+                    raw=it,
+                )
+            )
+        return out
+
+    def get_vote(
+        self,
+        chamber: str,
+        congress: int,
+        session: int,
+        vote_number: int,
+        *,
+        include_members: bool = False  # If True, fetch how each member voted
+    ) -> Vote:
+        """
+        Fetch detailed information for a specific vote.
+
+        Args:
+            chamber: Chamber of the vote ("house" or "senate")
+            congress: Congress number
+            session: Session number
+            vote_number: Vote/roll call number
+            include_members: If True, fetch how each member voted
+
+        Returns:
+            Vote object with detailed information
+
+        Warning:
+            The votes endpoints are currently in BETA and may be unreliable or return incomplete data.
+        """
+        chamber_lower = chamber.lower()
+        if chamber_lower not in ("house", "senate"):
+            raise ValueError(f"chamber must be 'house' or 'senate', got '{chamber}'")
+
+        self.logger.warning(
+            f"{chamber.title()} votes endpoint is in BETA - data may be incomplete or unavailable. "
+            "See https://api.congress.gov for current status."
+        )
+
+        v = self._get(f"{chamber_lower}-vote/{congress}/{session}/{vote_number}").get("vote", {})
+
+        # Extract bill and amendment info
+        bill_info = v.get("bill")
+        amendment_info = v.get("amendment")
+
+        members = []
+        if include_members:
+            members = self.get_vote_members(chamber, congress, session, vote_number)
+
+        return Vote(
+            congress=v.get("congress"),
+            session=v.get("session"),
+            vote_number=v.get("rollCallNumber") or v.get("voteNumber"),
+            chamber=chamber.title(),
+            vote_date=v.get("date"),
+            vote_type=v.get("voteType"),
+            vote_result=v.get("result"),
+            vote_question=v.get("question"),
+            vote_desc=v.get("description"),
+            vote_title=v.get("title"),
+            yea_total=v.get("yeas"),
+            nay_total=v.get("nays"),
+            present_total=v.get("present"),
+            not_voting_total=v.get("notVoting"),
+            bill=bill_info,
+            amendment=amendment_info,
+            members=members,
+            update_date=v.get("updateDate"),
+            api_url=self._url_with_key(v.get("url")),
+            raw=v,
+        )
+
+    def get_vote_members(
+        self,
+        chamber: str,
+        congress: int,
+        session: int,
+        vote_number: int,
+        *,
+        limit: Optional[int] = None  # Maximum number of member votes to return (None = all available)
+    ) -> List[VoteMember]:
+        """
+        Fetch how members voted on a specific vote.
+
+        Args:
+            chamber: Chamber of the vote ("house" or "senate")
+            congress: Congress number
+            session: Session number
+            vote_number: Vote/roll call number
+            limit: Maximum number of member votes to return (None = all available)
+
+        Returns:
+            List of VoteMember objects
+        """
+        chamber_lower = chamber.lower()
+        if chamber_lower not in ("house", "senate"):
+            raise ValueError(f"chamber must be 'house' or 'senate', got '{chamber}'")
+
+        data = self._get(f"{chamber_lower}-vote/{congress}/{session}/{vote_number}/members")
+        items = self._extract_items(data.get("members"))
+
+        # Apply limit if specified
+        if limit is not None and limit > 0:
+            items = items[:limit]
+
+        members: List[VoteMember] = []
+
+        for item in items:
+            members.append(
+                VoteMember(
+                    bioguide_id=item.get("bioguideId"),
+                    name=item.get("name"),
+                    party=item.get("party"),
+                    state=item.get("state"),
+                    vote_cast=item.get("voteCast"),
+                    raw=item,
+                )
+            )
+
+        return members
 
 
 #%%

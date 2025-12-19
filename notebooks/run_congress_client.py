@@ -16,7 +16,7 @@ CONGRESS_API_KEY = os.getenv("CONGRESS_API_KEY")
 client = CongressAPIClient(
     api_key=CONGRESS_API_KEY,
     timeout=60,
-    min_interval=0.0,   # set e.g. 0.1 to cap at ~10 rps
+    min_interval=0.1,   # set e.g. 0.1 to cap at ~10 rps
     max_tries=8,          # retry attempts for 429/5xx/timeouts
     backoff_base=0.75,  # base backoff seconds
     backoff_cap=30.0,    # max backoff sleep,
@@ -25,7 +25,7 @@ client = CongressAPIClient(
 
 #%%
 
-members = client.get_members(congress=96)
+members = client.get_members(congress=100)
 
 mbr = client.get_member(members[0].bioguide_id)
 pprint(mbr)
@@ -33,6 +33,26 @@ pprint(mbr)
 #%%
 
 bills = client.get_bills(117, 'hr', hydrate=True, limit=5)
+
+
+#%%
+
+actions_params = {
+    "congress": bills[1].congress,
+    "bill_type": bills[1].bill_type,
+    "bill_number": bills[1].bill_number
+}
+
+bill_actions = client.get_bill_actions(**actions_params)
+
+amendment_params = {
+    "congress": bills[1].amendments[0].congress,
+    "amendment_type": bills[1].amendments[0].amendment_type,
+    "amendment_number": int(bills[1].amendments[0].amendment_number)
+}
+amdt_actions = client.get_amendment_actions(**amendment_params)
+
+
 
 #%%
 TARGETS = {"hsas00", "ssas00", "ssfr00", "hsfa00"}

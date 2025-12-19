@@ -4,6 +4,8 @@ Typed wrapper around the Library of Congress **Congress.gov v3 API**, providing 
 
 - **Members of Congress** - Full biographical data, service history, party affiliations, and legislative activity
 - **Legislation** - Bills and amendments with sponsorship networks and cosponsorship tracking
+- **Bill Actions** - Legislative history and action tracking with standardized codes
+- **Congressional Votes** - House and Senate roll call votes with member-level voting records
 - **Committees** - Committees, subcommittees, and committee activities
 - **Hearings** - Hearing transcripts, witnesses, and documentation
 - **Committee Meetings** - Meeting schedules, documents, and participants
@@ -290,6 +292,103 @@ print(f"Documents: {len(meeting.documents)}")
 print(f"Related Bills: {len(meeting.related_bills)}")
 ```
 
+### Bill Actions
+
+Bill actions represent the legislative history and steps taken on a bill or amendment.
+
+**Get Bill Actions:**
+
+```python
+# Get all actions for a specific bill
+actions = client.get_bill_actions(congress=117, bill_type="hr", bill_number=3076)
+
+for action in actions:
+    print(f"{action.action_date}: {action.text}")
+    print(f"  Code: {action.action_code}, Type: {action.action_type}")
+
+# Limit results
+recent_actions = client.get_bill_actions(congress=117, bill_type="hr", bill_number=3076, limit=10)
+```
+
+**Get Amendment Actions:**
+
+```python
+# Get actions for a specific amendment
+actions = client.get_amendment_actions(
+    congress=118,
+    amendment_type="samdt",
+    amendment_number=1,
+    limit=10
+)
+```
+
+**Action Codes:**
+Actions include standardized numeric codes representing legislative stages:
+
+- **1000-9000**: House process (1000=Introduced, 8000=Passed House)
+- **10000-18000**: Senate process (10000=Introduced, 17000=Passed Senate)
+- **19000-24000**: Conference and resolution
+- **28000-31000**: Presidential actions (29000=Signed, 31000=Vetoed)
+- **36000-45000**: Becoming law (36000=Became Public Law)
+- **71000-97000**: Amendment actions
+
+See [Congress.gov Action Codes](https://www.congress.gov/help/field-values/action-codes) for complete reference.
+
+### Congressional Votes
+
+Fetch roll call votes from the House and Senate.
+
+**List Votes:**
+
+```python
+# Get House votes
+house_votes = client.get_votes(chamber="house", congress=118, session=1, limit=10)
+
+# Get Senate votes
+senate_votes = client.get_votes(chamber="senate", congress=118, session=1, limit=10)
+
+for vote in house_votes:
+    print(f"Vote #{vote.vote_number}: {vote.vote_question}")
+    print(f"  Result: {vote.vote_result} (Yeas: {vote.yea_total}, Nays: {vote.nay_total})")
+```
+
+**Get Specific Vote:**
+
+```python
+# Get detailed vote information with member voting records
+vote = client.get_vote(
+    chamber="house",
+    congress=118,
+    session=1,
+    vote_number=1,
+    include_members=True  # Include how each member voted
+)
+
+print(f"Vote on: {vote.vote_question}")
+print(f"Result: {vote.vote_result}")
+print(f"\nIndividual votes:")
+for member in vote.members[:10]:
+    print(f"  {member.name} ({member.party}-{member.state}): {member.vote_cast}")
+```
+
+**Get Vote Members:**
+
+```python
+# Fetch member votes separately (with limit to reduce data)
+members = client.get_vote_members(
+    chamber="house",
+    congress=118,
+    session=1,
+    vote_number=1,
+    limit=50
+)
+
+for member in members:
+    print(f"{member.name}: {member.vote_cast}")
+```
+
+**Note:** Vote endpoints are in BETA and may have incomplete data for some congresses/sessions.
+
 ### Advanced: Streaming with Filters
 
 For large-scale data collection, use `iter_entities()` to stream results with optional filtering:
@@ -494,6 +593,37 @@ Amendment information (similar structure to Bill):
 - `actions_count`, `actions_url`
 - `amendments_count`, `amendments_url` (amendments to this amendment)
 - `text_count`, `text_url`
+
+### BillAction
+
+Bill action information:
+
+- `action_code`: Standardized code (e.g., "36000" = Became Public Law)
+- `action_date`: Date of action
+- `text`: Description of the action
+- `action_type`: Type (e.g., "BecameLaw", "IntroReferral")
+- `source_system`: Source system information
+- `committees`: Committees involved
+- `recorded_votes`: Associated recorded votes
+- `calendar_number`, `action_time`: Additional details
+
+### Vote
+
+Congressional vote information:
+
+- `congress`, `session`, `vote_number`, `chamber`
+- `vote_date`, `vote_type`, `vote_result`
+- `vote_question`, `vote_desc`, `vote_title`
+- `yea_total`, `nay_total`, `present_total`, `not_voting_total`
+- `bill`, `amendment`: Related bill/amendment information
+- `members`: List of `VoteMember` objects (when fetched)
+
+### VoteMember
+
+Individual member vote record:
+
+- `bioguide_id`, `name`, `party`, `state`
+- `vote_cast`: How they voted ("Yea", "Nay", "Present", "Not Voting")
 
 ### Committee
 
