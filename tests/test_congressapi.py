@@ -307,7 +307,20 @@ def test_bill_cosponsors(client, requests_mock):
                     "url": f"{API_BASE}/member/J000032"
                 }
             ]}
-        })    # Test bill detail without cosponsors
+        })
+
+    # Mock subjects endpoint for hydrate=True test
+    subjects_url = f"{API_BASE}/bill/117/hr/3076/subjects"
+    requests_mock.get(subjects_url, json={
+        "subjects": {
+            "legislativeSubjects": [
+                {"name": "Government employee pay, benefits, personnel management", "updateDate": "2022-02-18T16:38:41Z"},
+                {"name": "Postal service", "updateDate": "2022-02-18T16:38:41Z"}
+            ]
+        }
+    })
+
+    # Test bill detail without cosponsors
     bill = client.get_bill(117, "hr", 3076)
     assert bill.cosponsors_count == 102
     assert bill.cosponsors_count_including_withdrawn == 102
@@ -573,3 +586,81 @@ def test_bill_amendments_with_cosponsors(client, requests_mock):
     cosponsor = amendment_hydrated.cosponsors[0]
     assert cosponsor.bioguide_id == "T000250"
     assert cosponsor.full_name == "Sen. Thune, John [R-SD]"
+
+def test_bill_subjects(client, requests_mock):
+    # Test getting bill detail with subjects summary
+    bill_url = f"{API_BASE}/bill/117/hr/7939"
+    requests_mock.get(bill_url, json={
+        "bill": {
+            "congress": 117,
+            "type": "HR",
+            "number": "7939",
+            "title": "Student Veteran Work Study Modernization Act",
+            "introducedDate": "2022-05-31",
+            "originChamber": "House",
+            "latestAction": {
+                "actionDate": "2022-06-08",
+                "text": "Referred to the House Committee on Veterans' Affairs."
+            },
+            "subjects": {
+                "count": 11,
+                "url": f"{API_BASE}/bill/117/hr/7939/subjects"
+            },
+            "textVersions": {"item": []},
+            "url": bill_url
+        }
+    })
+
+    # Test getting full subjects list
+    subjects_url = f"{API_BASE}/bill/117/hr/7939/subjects"
+    requests_mock.get(subjects_url, json={
+        "pagination": {"count": 11},
+        "request": {
+            "billNumber": "7939",
+            "billType": "hr",
+            "billUrl": "https://api.congress.gov/v3/bill/117/hr/7939?format=json",
+            "congress": "117",
+            "contentType": "application/json",
+            "format": "json"
+        },
+        "subjects": {
+            "legislativeSubjects": [
+                {"name": "Educational facilities and institutions", "updateDate": "2022-06-09T15:30:34Z"},
+                {"name": "Educational technology and distance education", "updateDate": "2022-06-09T15:30:34Z"},
+                {"name": "Employment and training programs", "updateDate": "2022-06-09T15:30:34Z"},
+                {"name": "Higher education", "updateDate": "2022-06-09T15:30:34Z"},
+                {"name": "Long-term, rehabilitative, and terminal care", "updateDate": "2022-06-09T15:30:34Z"},
+                {"name": "Student aid and college costs", "updateDate": "2022-06-09T15:30:34Z"},
+                {"name": "Temporary and part-time employment", "updateDate": "2022-06-09T15:30:34Z"},
+                {"name": "Unemployment", "updateDate": "2022-06-09T15:30:34Z"},
+                {"name": "Veterans' education, employment, rehabilitation", "updateDate": "2022-06-09T15:30:34Z"},
+                {"name": "Veterans' loans, housing, homeless programs", "updateDate": "2022-06-09T15:30:34Z"}
+            ],
+            "policyArea": {
+                "name": "Armed Forces and National Security",
+                "updateDate": "2022-06-08T18:00:36Z"
+            }
+        }
+    })
+
+    # Test bill detail without subjects
+    bill = client.get_bill(117, "hr", 7939)
+    assert bill.subjects_count == 11
+    assert bill.subjects_url is not None
+    assert len(bill.subjects) == 0  # Not fetched by default
+
+    # Test bill detail with subjects (hydrate=True)
+    bill_with_subjects = client.get_bill(117, "hr", 7939, hydrate=True)
+    assert len(bill_with_subjects.subjects) == 10  # Should have the subjects
+
+    # Check that subjects are strings (just names)
+    assert all(isinstance(s, str) for s in bill_with_subjects.subjects)
+    assert "Educational facilities and institutions" in bill_with_subjects.subjects
+    assert "Higher education" in bill_with_subjects.subjects
+    assert "Veterans' education, employment, rehabilitation" in bill_with_subjects.subjects
+
+    # Test getting subjects directly
+    subjects = client.get_bill_subjects(117, "hr", 7939)
+    assert len(subjects) == 10
+    assert all(isinstance(s, str) for s in subjects)
+    assert subjects[0] == "Educational facilities and institutions"

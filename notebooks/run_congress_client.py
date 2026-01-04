@@ -32,7 +32,7 @@ pprint(mbr)
 
 #%%
 
-bills = client.get_bills(117, 'hr', hydrate=True, limit=5)
+bills = client.get_bills(117, 'hr', hydrate=False, limit=5)
 
 
 #%%
@@ -52,7 +52,16 @@ amendment_params = {
 }
 amdt_actions = client.get_amendment_actions(**amendment_params)
 
+#%%
 
+subject_params = {
+    "congress": bills[3].congress,
+    "bill_type": bills[3].bill_type,
+    "bill_number": bills[3].bill_number
+}
+
+bill_subjects = client.get_bill_subjects(**subject_params)
+bill_subjects
 
 #%%
 TARGETS = {"hsas00", "ssas00", "ssfr00", "hsfa00"}

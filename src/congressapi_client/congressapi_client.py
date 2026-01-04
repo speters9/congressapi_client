@@ -1024,9 +1024,10 @@ class CongressAPIClient:
         if sponsor_obj and sponsor_obj not in sponsors_list:
             sponsors.append(self._dict_to_member(sponsor_obj))
 
-        # Optionally fetch full cosponsors and amendments lists
+        # Optionally fetch full cosponsors, amendments, and subjects lists
         cosponsors = []
         amendments = []
+        subjects = []
         if hydrate:
             if cosponsors_url:
                 cosponsors = self.get_bill_cosponsors(congress, bill_type_lower, bill_number)
@@ -1034,6 +1035,10 @@ class CongressAPIClient:
             if amendments_url:
                 # Fetch full amendment details with sponsors/cosponsors
                 amendments = self.get_bill_amendments(congress, bill_type_lower, bill_number, hydrate=True)
+            subjects_url = self._url_with_key(subjects_info.get("url"))
+            if subjects_url:
+                # Fetch full legislative subjects
+                subjects = self.get_bill_subjects(congress, bill_type_lower, bill_number)
 
         return Bill(
             congress=b.get("congress"),
@@ -1065,6 +1070,7 @@ class CongressAPIClient:
             related_bills_count=related_bills_info.get("count"),
             subjects_url=self._url_with_key(subjects_info.get("url")),
             subjects_count=subjects_info.get("count"),
+            subjects=subjects,
             summaries_url=self._url_with_key(summaries_info.get("url")),
             summaries_count=summaries_info.get("count"),
             titles_url=self._url_with_key(titles_info.get("url")),
@@ -1251,6 +1257,32 @@ class CongressAPIClient:
             ))
 
         return cosponsors
+
+    def get_bill_subjects(
+        self,
+        congress: int,
+        bill_type: str,
+        bill_number: int,
+        *,
+        limit: Optional[int] = None  # Maximum number of subjects to return (None = all available)
+    ) -> List[str]:
+        """Fetch the list of legislative subject names for a specific bill."""
+        # Ensure bill_type is lowercase for API endpoint
+        bill_type_lower = bill_type.lower()
+        data = self._get(f"bill/{congress}/{bill_type_lower}/{bill_number}/subjects")
+
+        # Extract legislative subjects from nested structure: data['subjects']['legislativeSubjects']
+        subjects_block = data.get("subjects", {})
+        legislative_subjects_data = self._extract_items(subjects_block.get("legislativeSubjects"))
+
+        # Extract just the 'name' field from each subject
+        subject_names = [s.get("name") for s in legislative_subjects_data if s.get("name")]
+
+        # Apply limit if specified
+        if limit is not None and limit > 0:
+            subject_names = subject_names[:limit]
+
+        return subject_names
 
     def get_bill_amendments(
         self,

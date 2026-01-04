@@ -297,6 +297,7 @@ class Bill:
     related_bills_count: Optional[int] = None
     subjects_url: Optional[str] = None  # URL to fetch legislative subjects
     subjects_count: Optional[int] = None
+    subjects: List[str] = field(default_factory=list)  # List of legislative subject names if fetched
     summaries_url: Optional[str] = None  # URL to fetch bill summaries
     summaries_count: Optional[int] = None
     titles_url: Optional[str] = None  # URL to fetch all bill titles
