@@ -170,6 +170,18 @@ class BillTextVersion:
 
 
 @dataclass
+class BillSummary:
+    """Represents a CRS-authored summary of a bill (or a specific version of the bill)."""
+    version_code: Optional[str] = None  # Summary version code (e.g., "00", "01")
+    action_date: Optional[str] = None  # Date associated with the summary version
+    action_desc: Optional[str] = None  # Description of the bill version (e.g., "Introduced in House")
+    text: Optional[str] = None  # Summary text, as returned by the API (contains HTML markup)
+    text_clean: Optional[str] = None  # Summary text with HTML tags stripped/entities unescaped
+    update_date: Optional[str] = None  # Date the summary was last updated
+    raw: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
 class VoteMember:
     """Represents how a member voted."""
     bioguide_id: Optional[str] = None
@@ -300,6 +312,7 @@ class Bill:
     subjects: List[str] = field(default_factory=list)  # List of legislative subject names if fetched
     summaries_url: Optional[str] = None  # URL to fetch bill summaries
     summaries_count: Optional[int] = None
+    summaries: List[BillSummary] = field(default_factory=list)  # Full list if fetched via hydration
     titles_url: Optional[str] = None  # URL to fetch all bill titles
     titles_count: Optional[int] = None
 

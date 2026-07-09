@@ -32,7 +32,15 @@ pprint(mbr)
 
 #%%
 
-bills = client.get_bills(117, 'hr', hydrate=False, limit=5)
+bills = client.get_bills(100, 'hr', hydrate=False, limit=5)
+
+#%%
+summaries = []
+for bill in tqdm(bills, desc="Getting bill summaries"):
+    most_recent_summary = client.get_bill_summaries(congress=bill.congress,
+                                        bill_type=bill.bill_type,
+                                        bill_number=bill.bill_number)[-1]
+    summaries.append(most_recent_summary)
 
 
 #%%

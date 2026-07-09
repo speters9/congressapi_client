@@ -15,11 +15,11 @@ from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 import requests
 from requests import RequestException
 
-from .models import (Amendment, Bill, BillAction, BillTextVersion, Committee,
-                     CommitteeMeeting, Hearing, HearingFormat, LeadershipRole,
-                     Member, MemberTerm, PartyAffiliation, Subcommittee, Vote,
-                     VoteMember)
-from .utils import logger_setup
+from .models import (Amendment, Bill, BillAction, BillSummary, BillTextVersion,
+                     Committee, CommitteeMeeting, Hearing, HearingFormat,
+                     LeadershipRole, Member, MemberTerm, PartyAffiliation,
+                     Subcommittee, Vote, VoteMember)
+from .utils import logger_setup, strip_html_tags
 
 #%%
 # ----------------------------------- Dataclass Definitions --------------------------------------#
@@ -977,7 +977,8 @@ class CongressAPIClient:
             congress: Congress number (e.g., 117)
             bill_type: Bill type ("hr", "s", "hjres", "sjres", etc.)
             bill_number: Bill number
-            hydrate: If True, fetch additional related data like full cosponsors list
+            hydrate: If True, fetch additional related data like full cosponsors list,
+                amendments, legislative subjects, and CRS summaries
         """
         # Ensure bill_type is lowercase for API endpoint
         bill_type_lower = bill_type.lower()
@@ -1024,10 +1025,11 @@ class CongressAPIClient:
         if sponsor_obj and sponsor_obj not in sponsors_list:
             sponsors.append(self._dict_to_member(sponsor_obj))
 
-        # Optionally fetch full cosponsors, amendments, and subjects lists
+        # Optionally fetch full cosponsors, amendments, subjects, and summaries lists
         cosponsors = []
         amendments = []
         subjects = []
+        summaries = []
         if hydrate:
             if cosponsors_url:
                 cosponsors = self.get_bill_cosponsors(congress, bill_type_lower, bill_number)
@@ -1039,6 +1041,10 @@ class CongressAPIClient:
             if subjects_url:
                 # Fetch full legislative subjects
                 subjects = self.get_bill_subjects(congress, bill_type_lower, bill_number)
+            summaries_url = self._url_with_key(summaries_info.get("url"))
+            if summaries_url:
+                # Fetch full CRS summaries
+                summaries = self.get_bill_summaries(congress, bill_type_lower, bill_number)
 
         return Bill(
             congress=b.get("congress"),
@@ -1073,6 +1079,7 @@ class CongressAPIClient:
             subjects=subjects,
             summaries_url=self._url_with_key(summaries_info.get("url")),
             summaries_count=summaries_info.get("count"),
+            summaries=summaries,
             titles_url=self._url_with_key(titles_info.get("url")),
             titles_count=titles_info.get("count"),
             amendments=amendments,
@@ -1116,10 +1123,12 @@ class CongressAPIClient:
 
         Returns:
             List of Bill objects. If hydrate=False, only basic fields are populated.
-            If hydrate=True, all fields including cosponsors, policy areas, etc. are populated.
+            If hydrate=True, all fields including cosponsors, amendments, subjects,
+            summaries, policy areas, etc. are populated.
 
         Warning:
-            Using hydrate=True is significantly slower as it makes individual API calls for each bill.
+            Using hydrate=True is significantly slower as it makes individual API calls for each bill
+            (plus additional calls per bill for cosponsors, amendments, subjects, and summaries).
             For 100 bills, expect ~50+ seconds due to rate limiting delays.
         """
         if congress and bill_type:
@@ -1215,6 +1224,7 @@ class CongressAPIClient:
                     subjects_count=None,  # Not in list response
                     summaries_url=None,  # Not in list response
                     summaries_count=None,  # Not in list response
+                    summaries=[],  # Not in list response (fetch via hydrate=True)
                     titles_url=None,  # Not in list response
                     titles_count=None,  # Not in list response
                     legislation_url=None,  # Not in list response
@@ -1283,6 +1293,42 @@ class CongressAPIClient:
             subject_names = subject_names[:limit]
 
         return subject_names
+
+    def get_bill_summaries(
+        self,
+        congress: int,
+        bill_type: str,
+        bill_number: int,
+        *,
+        limit: Optional[int] = None  # Maximum number of summaries to return (None = all available)
+    ) -> List[BillSummary]:
+        """Fetch the list of CRS summaries for a specific bill.
+
+        Corresponds to GET /bill/{congress}/{billType}/{billNumber}/summaries
+        """
+        # Ensure bill_type is lowercase for API endpoint
+        bill_type_lower = bill_type.lower()
+        data = self._get(f"bill/{congress}/{bill_type_lower}/{bill_number}/summaries")
+        items = self._extract_items(data.get("summaries"))
+
+        # Apply limit if specified
+        if limit is not None and limit > 0:
+            items = items[:limit]
+
+        summaries: List[BillSummary] = []
+
+        for item in items:
+            summaries.append(BillSummary(
+                version_code=item.get("versionCode"),
+                action_date=item.get("actionDate"),
+                action_desc=item.get("actionDesc"),
+                text=item.get("text"),
+                text_clean=strip_html_tags(item.get("text")),
+                update_date=item.get("updateDate"),
+                raw=item
+            ))
+
+        return summaries
 
     def get_bill_amendments(
         self,

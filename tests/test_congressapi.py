@@ -664,3 +664,81 @@ def test_bill_subjects(client, requests_mock):
     assert len(subjects) == 10
     assert all(isinstance(s, str) for s in subjects)
     assert subjects[0] == "Educational facilities and institutions"
+
+
+def test_bill_summaries(client, requests_mock):
+    # Test getting bill detail with summaries
+    bill_url = f"{API_BASE}/bill/117/hr/7939"
+    requests_mock.get(bill_url, json={
+        "bill": {
+            "congress": 117,
+            "type": "HR",
+            "number": "7939",
+            "title": "Student Veteran Work Study Modernization Act",
+            "introducedDate": "2022-05-31",
+            "originChamber": "House",
+            "latestAction": {
+                "actionDate": "2022-06-08",
+                "text": "Referred to the House Committee on Veterans' Affairs."
+            },
+            "summaries": {
+                "count": 2,
+                "url": f"{API_BASE}/bill/117/hr/7939/summaries"
+            },
+            "textVersions": {"item": []},
+            "url": bill_url
+        }
+    })
+
+    # Test getting full summaries list
+    summaries_url = f"{API_BASE}/bill/117/hr/7939/summaries"
+    requests_mock.get(summaries_url, json={
+        "pagination": {"count": 2},
+        "summaries": [
+            {
+                "versionCode": "00",
+                "actionDate": "2022-05-31",
+                "actionDesc": "Introduced in House",
+                "text": "<p>This bill modifies the student veteran work study program.</p>",
+                "updateDate": "2022-06-01T12:00:00Z"
+            },
+            {
+                "versionCode": "01",
+                "actionDate": "2022-06-08",
+                "actionDesc": "Reported to House",
+                "text": "<p>Updated summary after committee report.</p>",
+                "updateDate": "2022-06-09T12:00:00Z"
+            }
+        ]
+    })
+
+    # Test bill detail without summaries fetched
+    bill = client.get_bill(117, "hr", 7939)
+    assert bill.summaries_count == 2
+    assert bill.summaries_url is not None
+    assert len(bill.summaries) == 0  # Not fetched by default
+
+    # Test bill detail with summaries (hydrate=True)
+    bill_with_summaries = client.get_bill(117, "hr", 7939, hydrate=True)
+    assert len(bill_with_summaries.summaries) == 2
+
+    first, second = bill_with_summaries.summaries
+    assert first.version_code == "00"
+    assert first.action_desc == "Introduced in House"
+    assert "student veteran work study" in first.text
+    assert first.text_clean == "This bill modifies the student veteran work study program."
+    assert "<p>" not in first.text_clean
+    assert second.version_code == "01"
+    assert second.action_desc == "Reported to House"
+
+    # Test getting summaries directly
+    summaries = client.get_bill_summaries(117, "hr", 7939)
+    assert len(summaries) == 2
+    assert summaries[0].version_code == "00"
+    assert summaries[0].action_date == "2022-05-31"
+    assert summaries[1].version_code == "01"
+
+    # Test limit parameter
+    limited_summaries = client.get_bill_summaries(117, "hr", 7939, limit=1)
+    assert len(limited_summaries) == 1
+    assert limited_summaries[0].version_code == "00"
