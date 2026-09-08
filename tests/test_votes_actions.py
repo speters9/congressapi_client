@@ -59,8 +59,8 @@ def test_amendment_actions(client):
 @pytest.mark.timeout(10)
 def test_house_votes(client):
     """Test fetching House votes."""
-    # Use congress 117 which has complete data
-    votes = client.get_votes(chamber="house", congress=117, session=2, limit=3)
+    # Use congress 115 which has complete data
+    votes = client.get_votes(chamber="house", congress=115, session=2, limit=3)
 
     # Votes endpoint might be empty or unavailable
     if len(votes) == 0:
@@ -70,7 +70,7 @@ def test_house_votes(client):
     vote = votes[0]
     assert vote.vote_number is not None
     assert vote.chamber == "House"
-    assert vote.congress == 117
+    assert vote.congress == 115
     assert vote.session == 2
 
 
@@ -78,7 +78,7 @@ def test_house_votes(client):
 def test_house_vote_detail(client):
     """Test fetching a specific House vote WITHOUT member votes."""
     # First fetch votes list to get a valid vote number
-    votes = client.get_votes(chamber="house", congress=117, session=2, limit=1)
+    votes = client.get_votes(chamber="house", congress=115, session=2, limit=1)
 
     if len(votes) == 0:
         pytest.skip("No votes available to test vote detail endpoint")
@@ -86,7 +86,7 @@ def test_house_vote_detail(client):
     vote_num = votes[0].vote_number
 
     # Now fetch detailed vote
-    vote = client.get_vote(chamber="house", congress=117, session=2, vote_number=vote_num, include_members=False)
+    vote = client.get_vote(chamber="house", congress=115, session=2, vote_number=vote_num, include_members=False)
 
     assert vote is not None
 
@@ -103,7 +103,7 @@ def test_house_vote_detail(client):
 def test_house_vote_members(client):
     """Test fetching member votes separately (limited)."""
     # First fetch votes list to get a valid vote number
-    votes = client.get_votes(chamber="house", congress=117, session=2, limit=1)
+    votes = client.get_votes(chamber="house", congress=115, session=2, limit=1)
 
     if len(votes) == 0:
         pytest.skip("No votes available to test member votes endpoint")
@@ -111,7 +111,7 @@ def test_house_vote_members(client):
     vote_num = votes[0].vote_number
 
     # Now fetch member votes
-    members = client.get_vote_members(chamber="house", congress=117, session=2, vote_number=vote_num, limit=10)
+    members = client.get_vote_members(chamber="house", congress=115, session=2, vote_number=vote_num, limit=10)
 
     if len(members) == 0:
         pytest.skip("No member votes returned (endpoint may be unavailable)")
@@ -123,11 +123,11 @@ def test_house_vote_members(client):
 
 
 @pytest.mark.timeout(10)
-@pytest.mark.skip(reason="Senate votes endpoint returns 404 - not available for congress 117")
+@pytest.mark.skip(reason="Senate votes endpoint returns 404 - not available for congress 115")
 def test_senate_votes(client):
     """Test fetching Senate votes."""
     try:
-        votes = client.get_votes(chamber="senate", congress=117, session=2, limit=3)
+        votes = client.get_votes(chamber="senate", congress=115, session=2, limit=3)
 
         if len(votes) == 0:
             pytest.skip("No votes returned from API (endpoint may be unavailable)")
@@ -141,12 +141,12 @@ def test_senate_votes(client):
 
 
 @pytest.mark.timeout(10)
-@pytest.mark.skip(reason="Senate vote detail endpoint returns 404 - not available for congress 117")
+@pytest.mark.skip(reason="Senate vote detail endpoint returns 404 - not available for congress 115")
 def test_senate_vote_detail(client):
     """Test fetching a specific Senate vote WITHOUT member votes."""
     try:
         # First fetch votes list to get a valid vote number
-        votes = client.get_votes(chamber="senate", congress=117, session=2, limit=1)
+        votes = client.get_votes(chamber="senate", congress=115, session=2, limit=1)
 
         if len(votes) == 0:
             pytest.skip("No votes available to test vote detail endpoint")
@@ -154,7 +154,7 @@ def test_senate_vote_detail(client):
         vote_num = votes[0].vote_number
 
         # Now fetch detailed vote
-        vote = client.get_vote(chamber="senate", congress=117, session=2, vote_number=vote_num, include_members=False)
+        vote = client.get_vote(chamber="senate", congress=115, session=2, vote_number=vote_num, include_members=False)
 
         assert vote is not None
 
