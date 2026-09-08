@@ -121,7 +121,7 @@ CongressAPIClient(
 
 Each entity returned by the client has a corresponding dataclass in `congressapi_client.models` (`Member`, `Bill`, `Amendment`, `BillAction`, `Vote`, `VoteMember`, `Committee`, `Hearing`, `CommitteeMeeting`, etc.). Every dataclass carries a `raw` field with the unmodified API response, so you can always fall back to fields not yet promoted to typed attributes. Convert any object to a dict for export with `dataclasses.asdict()`.
 
-See the [hosted docs](https://speters9.github.io/congressapi-client/) for the full field listing per type.
+See the hosted docs [here](https://speters9.github.io/congressapi_client/) for the full field listing per type.
 
 ## Notes
 
