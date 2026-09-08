@@ -2,6 +2,8 @@
 
 Typed Python wrapper around the Library of Congress **Congress.gov v3 API**, covering members, bills, amendments, committees, hearings, committee meetings, votes, and bill/amendment actions.
 
+Full API reference (all parameters and data model fields) is available in the documentation [here](https://speters9.github.io/congressapi_client/).
+
 ## Features
 
 - **Typed data models** - dataclasses for all major entities, each with a `raw` field holding the full API response
@@ -85,8 +87,6 @@ for bill in client.iter_entities(
 ):
     print(f"{bill.title}: {len(bill.cosponsors)} cosponsors")
 ```
-
-Full API reference (all parameters and data model fields) is available in the [hosted docs](https://speters9.github.io/congressapi-client/).
 
 ## How the Client Works
 
