@@ -9,8 +9,8 @@ Client
    :undoc-members:
    :show-inheritance:
 
-Models
-------
+Object Types
+------------
 
 .. automodule:: congressapi_client.models
    :members:
