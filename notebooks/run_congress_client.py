@@ -25,6 +25,7 @@ client = CongressAPIClient(
 
 #%%
 
+# Example: get members from the 100th congress
 members = client.get_members(congress=100)
 
 mbr = client.get_member(members[0].bioguide_id)
@@ -32,9 +33,12 @@ pprint(mbr)
 
 #%%
 
+# Example: get bills from the 100th congress
 bills = client.get_bills(100, 'hr', hydrate=False, limit=5)
 
 #%%
+
+# Example: get summaries for the bills retrieved above
 summaries = []
 for bill in tqdm(bills, desc="Getting bill summaries"):
     most_recent_summary = client.get_bill_summaries(congress=bill.congress,
@@ -42,8 +46,11 @@ for bill in tqdm(bills, desc="Getting bill summaries"):
                                         bill_number=bill.bill_number)[-1]
     summaries.append(most_recent_summary)
 
+summaries
 
 #%%
+
+# Example: get bill and amendment actions for the bills retrieved above
 
 actions_params = {
     "congress": bills[1].congress,
@@ -53,15 +60,27 @@ actions_params = {
 
 bill_actions = client.get_bill_actions(**actions_params)
 
-amendment_params = {
-    "congress": bills[1].amendments[0].congress,
-    "amendment_type": bills[1].amendments[0].amendment_type,
-    "amendment_number": int(bills[1].amendments[0].amendment_number)
-}
-amdt_actions = client.get_amendment_actions(**amendment_params)
+print("Bill Actions for :", actions_params)
+print(bill_actions)
+
+
+amdt_actions = []
+for b in bills:
+    if b.amendments:
+        amendment_params = {
+            "congress": bills[1].amendments[0].congress,
+            "amendment_type": bills[1].amendments[0].amendment_type,
+            "amendment_number": int(bills[1].amendments[0].amendment_number)
+        }
+        actions = client.get_amendment_actions(**amendment_params)
+        amdt_actions.append(actions)
+
+print("\nAmendment Actions:")
+print(amdt_actions)
 
 #%%
 
+# Example: get bill subjects
 subject_params = {
     "congress": bills[3].congress,
     "bill_type": bills[3].bill_type,
@@ -72,6 +91,8 @@ bill_subjects = client.get_bill_subjects(**subject_params)
 bill_subjects
 
 #%%
+
+# Example: pull hearing data for house and senate armed services and foreign affairs/international relations committees
 TARGETS = {"hsas00", "ssas00", "ssfr00", "hsfa00"}
 
 all_hearings = client.get_hearings(congress=118, chamber="house")
@@ -79,19 +100,24 @@ all_hearings = client.get_hearings(congress=118, chamber="house")
 # %%
 
 hearings_to_keep=[]
+seen_jackets = set()  # dedupe: one entry per hearing, not one per format
 for i, h in enumerate(tqdm(all_hearings)):
+    if h.jacket_number in seen_jackets:
+        continue
     full = client.get_hearing(congress=h.congress,
                               chamber=h.chamber.lower(),
                               jacket_number=h.jacket_number)
     if any(c["systemCode"] in TARGETS for c in full.committees):
-        for f in full.formats:
-            if f.type in ("PDF", "Formatted Text"):
-                hearings_to_keep.append({
-                    "title": full.title,
-                    "url": f.url,
-                    "committee": full.committees
-                })
-                print(full.title, f.url)
+        urls = [f.url for f in full.formats if f.type in ("PDF", "Formatted Text")]
+        if urls:
+            seen_jackets.add(h.jacket_number)
+            hearings_to_keep.append({
+                "jacket_number": h.jacket_number,
+                "title": full.title,
+                "urls": urls,
+                "committee": full.committees
+            })
+            print(full.title, urls)
     if len(hearings_to_keep) >= 10:
         break
 # %%
